@@ -9,7 +9,7 @@ body {
     justify-content: center;
     align-items: center;
     flex-direction: column;
-    font-family: 'Sofia Sans', sans-serif;
+    font-family: 'Sofia Sans', 'Inter', sans-serif;
     background-color: white;
     min-height: 100vh;
 }
@@ -50,7 +50,7 @@ body {
 .text-light {
     color: #CCDBE2;
     font-size: 48px;
-    font-family: 'Sofia Sans', sans-serif;
+    font-family: 'Sofia Sans', 'Inter', sans-serif;
     font-weight: 700;
     line-height: 45.10px;
     word-wrap: break-word;
@@ -60,7 +60,7 @@ body {
 .highlight {
     color: #385C78;
     font-size: 48px;
-    font-family: 'Sofia Sans', sans-serif;
+    font-family: 'Sofia Sans', 'Inter', sans-serif;
     font-weight: 800;
     line-height: 45.10px;
     word-wrap: break-word;
@@ -96,7 +96,7 @@ body {
 .text-light-700 {
     color: #CCDBE2;
     font-size: 48px;
-    font-family: 'Sofia Sans', sans-serif;
+    font-family: 'Sofia Sans', 'Inter', sans-serif;
     font-weight: 700;
     line-height: 45.10px;
     word-wrap: break-word;
