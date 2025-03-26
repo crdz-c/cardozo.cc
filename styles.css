@@ -1,4 +1,4 @@
-* {
+<file name=0 path=/Users/cardozo/Desktop/cardozo.cc/styles.css>* {
     margin: 0;
     padding: 0;
     box-sizing: border-box;
@@ -84,3 +84,10 @@ body {
     width: 100%;
     height: auto;
 }
+
+@media (max-width: 500px) {
+    .container {
+        padding: 56px 32px 32px 32px;
+    }
+}
+</file>
