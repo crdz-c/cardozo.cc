@@ -1,0 +1,241 @@
+<!DOCTYPE html>
+<html lang="pt-BR" class="scroll-smooth">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Lucas Cardozo - Product Designer</title>
+    
+    <!-- Tailwind CSS -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    
+    <!-- Google Fonts -->
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Kanit:wght@300;400;500&family=Unbounded:wght@500;600;800&display=swap" rel="stylesheet">
+    
+    <!-- GSAP Animation Library -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/gsap/3.12.2/gsap.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/gsap/3.12.2/ScrollTrigger.min.js"></script>
+
+    <!-- Configuração do Tailwind -->
+    <script>
+        tailwind.config = {
+            theme: {
+                extend: {
+                    fontFamily: {
+                        'kanit': ['Kanit', 'sans-serif'],
+                        'unbounded': ['Unbounded', 'sans-serif'],
+                    },
+                    colors: {
+                        stone: { 100: '#F7F4ED', 700: '#403D36' },
+                        neutral: { 400: '#8C8C8C', 500: '#737271' },
+                        brand: { red: '#EA5B6F', orange: '#FF894F', yellow: '#FFCB61' }
+                    }
+                }
+            }
+        }
+    </script>
+</head>
+<body class="bg-stone-100 font-kanit text-stone-700">
+
+    <!-- Header & Navegação -->
+    <header class="sticky top-0 left-0 z-50 w-full bg-stone-100">
+        <nav class="w-full max-w-[1120px] mx-auto flex items-center justify-between px-5 py-6">
+            <a href="#" aria-label="Página inicial">
+                <img src="./assets/logo-lucas-cardozo.svg" alt="Logo Lucas Cardozo" class="h-6 w-auto">
+            </a>
+            <div class="hidden items-center gap-10 md:flex">
+                <a href="#experience" class="text-sm font-normal uppercase leading-3 tracking-[3.36px] text-neutral-400 transition-colors hover:text-stone-700">Experience</a>
+                <a href="#cases" class="text-sm font-normal uppercase leading-3 tracking-[3.36px] text-neutral-400 transition-colors hover:text-stone-700">cases</a>
+                <a href="#contact" class="text-sm font-normal uppercase leading-3 tracking-[3.36px] text-neutral-400 transition-colors hover:text-stone-700">contact</a>
+            </div>
+            <div class="md:hidden">
+                <button aria-label="Abrir menu" class="text-stone-700">
+                    <svg xmlns="http://www.w3.org/2000/svg" class="h-6 w-6" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 6h16M4 12h16m-7 6h7" /></svg>
+                </button>
+            </div>
+        </nav>
+    </header>
+
+    <!-- Container para as seções sticky -->
+    <div class="relative">
+
+        <!-- Seção Principal (Hero) -->
+        <main class="sticky top-0 flex min-h-screen flex-col bg-stone-100">
+            <section id="hero-content" class="w-full max-w-[1120px] mx-auto flex flex-grow flex-col items-center justify-center gap-12 px-5 pt-24 pb-10 text-center md:gap-20">
+                <div data-anim="fade-up" class="flex flex-col items-center gap-4">
+                    <div class="text-5xl font-bold text-stone-700">✳</div>
+                    <p class="w-full max-w-lg text-sm font-medium uppercase leading-none tracking-[11.20px] text-stone-700">i •am• Lucas</p>
+                </div>
+                <h1 data-anim="fade-up" class="max-w-3xl font-unbounded text-5xl font-medium text-stone-700 leading-[3.0rem]">
+                    Crafting the logic for automated and intelligent products
+                </h1>
+                <p data-anim="fade-up" class="max-w-lg text-base font-light leading-none text-neutral-400">
+                    A product designer with a passion for the technical side of UX. I specialize in automation, integrations, and AI-driven systems, architecting solutions that are both powerful for the business and intuitive for the user.
+                </p>
+            </section>
+            <div class="h-[150px] w-full flex flex-col">
+                <div class="h-[50px] w-full bg-brand-red"></div>
+                <div class="h-[50px] w-full bg-brand-orange"></div>
+                <div class="h-[50px] w-full bg-brand-yellow"></div>
+            </div>
+        </main>
+
+        <!-- Seção de Experiência -->
+        <section id="experience" class="sticky top-0 min-h-screen bg-stone-700 text-stone-100 flex flex-col justify-center">
+            <div class="w-full max-w-[1120px] mx-auto flex flex-col gap-16 px-5 py-20 md:py-32">
+                <div class="max-w-md">
+                    <h2 data-anim="fade-left" class="font-unbounded text-3xl font-medium leading-tight md:text-4xl md:leading-10">
+                        <span class="text-stone-100">Companies and challenges that have</span>
+                        <span class="text-neutral-400"> shaped my career</span>
+                    </h2>
+                    <p data-anim="fade-up" class="mt-8 font-kanit text-[1.1rem] font-light leading-tight text-neutral-400">
+                        How a user-centered, dual-interface system made automation accessible to HR teams at Remote.
+                    </p>
+                </div>
+                <div data-anim="fade-up" class="flex flex-col gap-8">
+                    <div class="flex items-center gap-8 overflow-x-auto pb-4 md:justify-between md:overflow-visible">
+                        <img src="./assets/logo-remote.svg" alt="Logo da Remote" class="h-7 w-auto flex-shrink-0">
+                        <img src="./assets/logo-shore.svg" alt="Logo da Shore" class="h-7 w-auto flex-shrink-0">
+                        <img src="./assets/logo-ambev.svg" alt="Logo da Ambev" class="h-7 w-auto flex-shrink-0">
+                        <img src="./assets/logo-magnetis.svg" alt="Logo da Magnetis" class="h-7 w-auto flex-shrink-0">
+                        <img src="./assets/logo-henkel.svg" alt="Logo da Henkel" class="h-7 w-auto flex-shrink-0">
+                    </div>
+                    <hr class="border-stone-100/20" />
+                    <div class="grid gap-8 lg:grid-cols-3 lg:gap-16">
+                        <div class="lg:col-span-1">
+                            <h3 class="font-kanit text-base font-normal leading-tight">Remote</h3>
+                            <p class="text-base font-light leading-tight text-neutral-400">Sr. Product Designer</p>
+                            <p class="text-base font-light leading-tight text-neutral-400">March 2021 - November 2024</p>
+                        </div>
+                        <div class="grid gap-8 sm:grid-cols-2 lg:col-span-2 lg:grid-cols-2">
+                             <div class="max-w-sm"><p class="leading-tight"><span class="font-light text-stone-100">Workflow & Automation: </span><span class="font-light text-neutral-400">Led the design of the "Workflow Automation" engine, a core B2B SaaS feature that allows HR administrators to automate complex processes like onboarding and approvals. Architected the user-facing logic, designed the UI component system, and worked directly with engineers on API and system constraints.</span></p></div>
+                            <div class="max-w-sm"><p class="leading-tight"><span class="font-light text-stone-100">Integrations & APIs: </span><span class="font-light text-neutral-400">Designed the "invisible" white-label integration experience for the strategic partnership "Gusto EOR, powered by Remote." Created the service blueprint for this API and webhook-driven product. Also designed experiences for Remote's developer platform and public API documentation.</span></p></div>
+                            <div class="max-w-sm"><p class="leading-tight"><span class="font-light text-stone-100">Design System & UI Craft: </span><span class="font-light text-neutral-400">Was a key contributor to Remote's design system, "Norma." Proactively established a more agile, continuous review process to improve consistency and reduce design debt across the organization.</span></p></div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </section>
+
+        <!-- Seção de Cases (Intro) -->
+        <section id="cases" class="sticky top-0 min-h-screen bg-stone-100 text-stone-700 flex flex-col justify-center">
+            <div class="w-full max-w-[1120px] mx-auto flex flex-col gap-16 px-5 py-20 md:py-32">
+                <div class="max-w-md">
+                    <div data-anim="fade-up" class="mb-14">
+                        <img src="./assets/logo-case-remote.svg" alt="Logo da Remote" class="h-6 w-auto">
+                    </div>
+                    <h2 data-anim="fade-left" class="font-unbounded text-3xl font-medium leading-tight md:text-4xl md:leading-10">
+                        <span class="text-stone-700">Designing an automation engine </span>
+                        <span class="text-neutral-400">for everyone</span>
+                    </h2>
+                    <p data-anim="fade-up" class="mt-8 font-kanit text-[1.1rem] font-light leading-tight text-neutral-400">
+                        How a user-centered, dual-interface system made automation accessible to HR teams at Remote.
+                    </p>
+                </div>
+                <div data-anim="fade-up" class="grid grid-cols-1 gap-8 sm:grid-cols-2 lg:grid-cols-4">
+                    <div class="flex flex-col gap-6"><img src="./assets/icon-product.svg" alt="Ícone de Produto" class="h-5 w-auto self-start"><div class="flex flex-col gap-3"><hr class="border-neutral-500/50" /><h3 class="font-unbounded text-sm font-normal uppercase leading-none">PRODUCT</h3><p class="font-kanit text-base font-light leading-tight text-neutral-500">Workflow Automation Engine</p></div></div>
+                    <div class="flex flex-col gap-6"><img src="./assets/icon-role.svg" alt="Ícone de Função" class="h-5 w-auto self-start"><div class="flex flex-col gap-3"><hr class="border-neutral-500/50" /><h3 class="font-unbounded text-sm font-normal uppercase leading-none">ROLE</h3><p class="font-kanit text-base font-light leading-tight text-neutral-500">Lead Product Designer</p></div></div>
+                    <div class="flex flex-col gap-6"><img src="./assets/icon-challenge.svg" alt="Ícone de Desafio" class="h-5 w-auto self-start"><div class="flex flex-col gap-3"><hr class="border-neutral-500/50" /><h3 class="font-unbounded text-sm font-normal uppercase leading-none">Challenge</h3><p class="font-kanit text-base font-light leading-tight text-neutral-500">To save HR teams from drowning in manual tasks by creating an automation tool they'd actually want to use.</p></div></div>
+                    <div class="flex flex-col gap-6"><img src="./assets/icon-outcome.svg" alt="Ícone de Resultado" class="h-5 w-auto self-start"><div class="flex flex-col gap-3"><hr class="border-neutral-500/50" /><h3 class="font-unbounded text-sm font-normal uppercase leading-none">Outcome</h3><p class="font-kanit text-base font-light leading-tight text-neutral-500">The MVP of an automation platform with two "front doors": one visual, one AI-powered. The solution solved real user pains and validated a long-term product strategy, proving that automation doesn't have to be rocket science.</p></div></div>
+                </div>
+            </div>
+        </section>
+
+        <!-- Seção de Cases (Detalhes 1)     -->
+        <section class="sticky top-0 min-h-screen bg-stone-100 text-stone-700 flex flex-col justify-center">
+             <div class="w-full max-w-[1120px] mx-auto flex flex-col justify-center gap-16 px-5 py-20 md:py-32">
+                <h2 data-anim="fade-left" class="w-full max-w-xs font-unbounded text-[32px] font-normal leading-tight">When an "easy" automation isn't that easy</h2>
+
+                <div class="flex flex-col items-start gap-9 lg:flex-row">
+                    <!-- Coluna de Texto -->
+                    <div data-anim="fade-up" class="flex w-full flex-col gap-8 lg:max-w-xs">
+                        <p class="text-base font-light leading-tight text-neutral-400">As an MVP with a tight deadline, we didn't have the luxury of a long research phase. To ground our decisions in user needs quickly, I took a pragmatic approach. I dove into Dovetail, synthesizing past interviews and research from various teams across the product.</p>
+                        <p class="text-base font-light leading-tight text-neutral-400">The findings were consistent: whether in onboarding, time off, or billing, users repeatedly expressed a need to integrate other platforms and automate manual processes. They lacked the developer resources or technical knowledge to build complex solutions themselves.</p>
+                        <p class="text-base font-light leading-tight text-neutral-400">This rapid research sprint didn't just validate the need for a simpler tool; it clarified my role on the project. It became my job to act as the bridge between our non-technical users and the system's complexity. This pushed me to work even more closely with developers, deepening my understanding of the technical constraints so I could effectively 'translate' them into a simple experience.</p>
+                    </div>
+                    <!-- Coluna de Imagem -->
+                    <div data-anim="fade-up" class="h-[505px] w-full flex-1 rounded-md bg-neutral-400/25">
+                        <!-- Imagem do Case Study aqui -->
+                    </div>
+                </div>
+             </div>
+        </section>
+
+        <!-- Seção de Cases (Detalhes 2)     -->
+        <section class="sticky top-0 min-h-screen bg-stone-100 text-stone-700 flex flex-col justify-center">
+             <div class="w-full max-w-[1120px] mx-auto flex flex-col justify-center gap-16 px-5 py-20 md:py-32">
+                <h2 data-anim="fade-left" class="w-full max-w-[352px] font-unbounded text-[32px] font-normal leading-tight">The blueprint: two paths to the same goal</h2>
+                
+                <div class="flex flex-col items-start gap-8 lg:flex-row">
+                    <!-- Coluna de Texto Principal -->
+                    <div data-anim="fade-up" class="w-full lg:w-1/3 lg:max-w-xs">
+                         <p class="text-base font-light leading-tight text-neutral-400">My strategy was to meet users where they were. The research showed two distinct mindsets: the hands-on admin who wants control, and the busy manager who wants speed. A single interface wouldn't serve both well. The solution was to create two distinct paths to the same outcome, all powered by a single engine.</p>
+                    </div>
+                    <!-- Colunas de Imagens -->
+                    <div data-anim="fade-up" class="grid w-full grid-cols-1 gap-8 sm:grid-cols-2 lg:w-2/3">
+                        <!-- Path 1 -->
+                        <div class="flex flex-col items-center gap-8 text-left">
+                            <div class="h-96 w-full rounded-md bg-neutral-400/25"></div>
+                            <p class="w-full text-base font-light leading-tight text-neutral-400"><b>Path 1: The Visual Builder.</b><br>A "no-code" interface for users who think visually and want to control every step of the process.</p>
+                        </div>
+                        <!-- Path 2 -->
+                        <div class="flex flex-col items-center gap-8 text-left">
+                            <div class="h-96 w-full rounded-md bg-neutral-400/25"></div>
+                            <p class="w-full text-base font-light leading-tight text-neutral-400"><b>Path 2: The AI Assistant.</b><br>A conversational interface for users who prefer to just describe their goal in plain language.</p>
+                        </div>
+                    </div>
+                </div>
+             </div>
+        </section>
+    </div>
+
+    <script>
+        document.addEventListener('DOMContentLoaded', function() {
+            gsap.registerPlugin(ScrollTrigger);
+
+            // Define o estado inicial dos elementos para animação usando GSAP
+            gsap.set('[data-anim]', { autoAlpha: 0 });
+            gsap.set('[data-anim="fade-up"]', { y: 50 });
+            gsap.set('[data-anim="fade-left"]', { x: -50 });
+
+            // --- Animação da Seção Hero ---
+            const heroElements = gsap.utils.toArray('#hero-content [data-anim="fade-up"]');
+            gsap.to(heroElements, {
+                y: 0,
+                autoAlpha: 1,
+                stagger: 0.2, 
+                duration: 1,
+                ease: 'power3.out'
+            });
+
+
+            // --- Animações das outras seções com ScrollTrigger ---
+            const sections = gsap.utils.toArray('section:not(main section)');
+
+            sections.forEach((section) => {
+                const fadeLeftElements = section.querySelectorAll('[data-anim="fade-left"]');
+                const fadeUpElements = section.querySelectorAll('[data-anim="fade-up"]');
+
+                const sectionTl = gsap.timeline({
+                    scrollTrigger: {
+                        trigger: section,
+                        start: 'top 80%', 
+                        toggleActions: 'restart none none reset', 
+                    },
+                    defaults: { duration: 1, ease: 'power3.out' } 
+                });
+
+                if (fadeLeftElements.length > 0) {
+                    sectionTl.to(fadeLeftElements, { x: 0, autoAlpha: 1, stagger: 0.2 });
+                }
+
+                if (fadeUpElements.length > 0) {
+                    sectionTl.to(fadeUpElements, { y: 0, autoAlpha: 1, stagger: 0.2 }, "-=0.7");
+                }
+            });
+        });
+    </script>
+
+</body>
+</html>
