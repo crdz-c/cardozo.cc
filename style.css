@@ -1,38 +1,37 @@
-/* cardozo.cc — single intro page.
-   Tokens mirror the Astro rebuild (black page, white type on an opacity ramp, Kanit). */
+/* cardozo.cc — hero.
+   One screen: a dithered orb, the CRDZC wordmark as the main element, a HUD frame and mono labels.
+   Visual language borrowed in spirit (not code) from christendijoux.com: ink stage, paper type,
+   hairlines, condensed display + mono. */
 
 @font-face {
-  font-family: "Kanit";
+  font-family: "Big Shoulders Display";
+  src: url("fonts/big-shoulders-display.woff2") format("woff2");
+  font-weight: 300 700;
   font-style: normal;
-  font-weight: 300;
   font-display: swap;
-  src: url("fonts/kanit-300.woff2") format("woff2");
 }
 
 @font-face {
-  font-family: "Kanit";
+  font-family: "Geist Mono";
+  src: url("fonts/geist-mono.woff2") format("woff2");
+  font-weight: 400 500;
   font-style: normal;
-  font-weight: 500;
   font-display: swap;
-  src: url("fonts/kanit-500.woff2") format("woff2");
 }
 
 :root {
-  --color-bg: #000;
-  --color-fg: #fff;
-  --color-fg-subtle: rgba(255, 255, 255, 0.5);
-  --color-fg-faint: rgba(255, 255, 255, 0.25);
-  --color-hairline: rgba(255, 255, 255, 0.1);
+  --ink: #050505;
+  --paper: #f2f2ee;
+  --dim: rgba(242, 242, 238, 0.56);
+  --line: rgba(242, 242, 238, 0.14);
+  --line-strong: rgba(242, 242, 238, 0.3);
 
-  --font-sans: "Kanit", system-ui, -apple-system, "Segoe UI", sans-serif;
+  --font-display: "Big Shoulders Display", "Arial Narrow", Impact, sans-serif;
+  --font-mono: "Geist Mono", ui-monospace, "SF Mono", Menlo, monospace;
 
-  --text-name: clamp(2.75rem, 8vw, 4.4375rem);
-  --text-lead: clamp(1.375rem, 3vw, 1.75rem);
-  --text-link: clamp(1.125rem, 2.2vw, 1.375rem);
-  --text-label: 0.8125rem;
-
-  --gutter: clamp(1.5rem, 10vw, 16rem);
-  --ease: cubic-bezier(0.22, 1, 0.36, 1);
+  --frame: 8px;
+  --pad: clamp(16px, 2.8vw, 40px);
+  --ease: cubic-bezier(0.16, 1, 0.3, 1);
 
   color-scheme: dark;
 }
@@ -49,24 +48,16 @@
 
 html {
   -webkit-text-size-adjust: 100%;
+  background: var(--ink);
 }
 
 body {
-  min-height: 100vh;
-  min-height: 100svh;
-  background: var(--color-bg);
-  color: var(--color-fg);
-  font-family: var(--font-sans);
-  font-weight: 300;
-  line-height: 1.4;
+  background: var(--ink);
+  color: var(--paper);
+  font-family: var(--font-mono);
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
   text-rendering: optimizeLegibility;
-}
-
-::selection {
-  background: var(--color-fg);
-  color: var(--color-bg);
 }
 
 a {
@@ -74,104 +65,359 @@ a {
   text-decoration: none;
 }
 
+::selection {
+  background: var(--paper);
+  color: var(--ink);
+}
+
 :focus-visible {
-  outline: 2px solid var(--color-fg);
+  outline: 1px solid var(--paper);
   outline-offset: 4px;
 }
 
-.page {
-  min-height: 100vh;
-  min-height: 100svh;
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  margin: -1px;
+  padding: 0;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  white-space: nowrap;
+  border: 0;
+}
+
+/* ---------------------------------------------------------------- stage */
+
+.hero {
+  position: relative;
+  isolation: isolate;
+  display: grid;
+  grid-template-rows: auto 1fr auto auto;
+  height: 100vh;
+  height: 100svh;
+  min-height: 560px;
+  padding: calc(var(--frame) + 10px) var(--pad);
+  background: var(--ink);
+  overflow: hidden;
+}
+
+.hero > :not(canvas) {
+  position: relative;
+  z-index: 1;
+}
+
+.orb {
+  position: absolute;
+  inset: 0;
+  z-index: 0;
+  width: 100%;
+  height: 100%;
+  display: block;
+  image-rendering: pixelated; /* crisp cells when the canvas is upscaled on high-DPI screens */
+  opacity: 0;
+  transition: opacity 1.2s ease;
+}
+
+.gl .orb {
+  opacity: 1;
+}
+
+/* faint dot grid, fading away from the orb */
+.dots {
+  position: absolute !important;
+  inset: 0;
+  z-index: 0 !important;
+  pointer-events: none;
+  background-image: radial-gradient(circle at 1px 1px, rgba(242, 242, 238, 0.2) 1px, transparent 1.4px);
+  background-size: 28px 28px;
+  -webkit-mask-image: radial-gradient(ellipse 62% 70% at var(--ox, 68%) var(--oy, 40%), #000 0%, transparent 78%);
+  mask-image: radial-gradient(ellipse 62% 70% at var(--ox, 68%) var(--oy, 40%), #000 0%, transparent 78%);
+  transition: opacity 1.6s ease 0.4s;
+}
+
+/* HUD frame: four hairlines inset from the viewport edge */
+.frame {
+  position: absolute !important;
+  inset: var(--frame);
+  z-index: 1;
+  pointer-events: none;
+}
+
+.frame i {
+  position: absolute;
+  background: var(--line-strong);
+  transition: transform 1.3s var(--ease);
+}
+
+.frame i:nth-child(1) { top: 0; left: 0; right: 0; height: 1px; transform-origin: left; }
+.frame i:nth-child(2) { top: 0; right: 0; bottom: 0; width: 1px; transform-origin: top; transition-delay: 0.1s; }
+.frame i:nth-child(3) { bottom: 0; left: 0; right: 0; height: 1px; transform-origin: right; transition-delay: 0.2s; }
+.frame i:nth-child(4) { top: 0; left: 0; bottom: 0; width: 1px; transform-origin: bottom; transition-delay: 0.3s; }
+
+/* ---------------------------------------------------------------- labels */
+
+.bar {
   display: flex;
-  flex-direction: column;
-  justify-content: center;
-  gap: clamp(3.5rem, 9vh, 6rem);
-  padding: 6rem var(--gutter);
-}
-
-.name {
+  align-items: center;
+  justify-content: space-between;
+  gap: 24px;
+  min-height: 40px;
+  font-size: 11px;
   font-weight: 500;
-  font-size: var(--text-name);
-  line-height: 0.95;
-  letter-spacing: -0.01em;
-  margin-bottom: clamp(1.75rem, 4vh, 2.75rem);
-}
-
-.lead {
-  font-size: var(--text-lead);
-  line-height: 1.07;
-}
-
-.lead--subtle {
-  color: var(--color-fg-subtle);
-}
-
-.label {
-  font-weight: 300;
-  font-size: var(--text-label);
-  line-height: 1.2;
-  letter-spacing: 0.2em;
+  line-height: 1;
+  letter-spacing: 0.14em;
   text-transform: uppercase;
-  color: var(--color-fg-subtle);
-  margin-bottom: 1rem;
+  color: var(--dim);
 }
 
-.contacts__list {
+.bar nav {
+  display: flex;
+  gap: clamp(16px, 3vw, 36px);
+}
+
+.bar a {
+  position: relative;
+  padding-block: 6px;
+  color: var(--paper);
+}
+
+.bar a::after {
+  content: "";
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 2px;
+  height: 1px;
+  background: currentColor;
+  transform: scaleX(0);
+  transform-origin: right;
+  transition: transform 0.5s var(--ease);
+}
+
+.bar a:hover::after,
+.bar a:focus-visible::after {
+  transform: scaleX(1);
+  transform-origin: left;
+}
+
+/* ---------------------------------------------------------------- headline */
+
+.lede {
+  grid-row: 2;
+  align-self: end;
+  max-width: min(44rem, 100%);
+  margin-bottom: clamp(18px, 3.6vh, 40px);
+  font-family: var(--font-display);
+  font-size: clamp(2.1rem, 4.5vw, 4.3rem);
+  font-weight: 300;
+  line-height: 0.94;
+  letter-spacing: 0.005em;
+  text-transform: uppercase;
+}
+
+.eyebrow {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: clamp(14px, 2.4vh, 26px);
+  font-family: var(--font-mono);
+  font-size: 11px;
+  font-weight: 500;
+  line-height: 1;
+  letter-spacing: 0.14em;
+  color: var(--dim);
+}
+
+.dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--paper);
+  animation: pulse 2.4s ease-in-out infinite;
+}
+
+.ln {
+  display: block;
+  overflow: hidden;
+  padding-block: 0.03em;
+}
+
+.ln > span {
+  display: block;
+  transition: transform 1.1s var(--ease);
+}
+
+.ln:nth-of-type(3) > span { transition-delay: 0.08s; }
+.ln:nth-of-type(4) > span { transition-delay: 0.16s; }
+.ln:nth-of-type(5) > span { transition-delay: 0.24s; }
+
+.ln--o > span {
+  font-weight: 400;
+  color: transparent;
+  -webkit-text-stroke: 1px var(--paper);
+}
+
+/* ---------------------------------------------------------------- the logo */
+
+.logo {
+  grid-row: 3;
+  margin: 0 0 6px;
+  line-height: 0;
+  mix-blend-mode: difference; /* letters invert where they cross the lit orb */
+}
+
+.logo svg {
+  display: block;
+  width: 100%;
+  height: auto;
+  overflow: hidden;
+  fill: #fff;
+}
+
+.logo path {
+  transform-box: fill-box;
+  transform-origin: 50% 100%;
+  transition: transform 1.25s var(--ease);
+}
+
+.logo .lt:nth-child(2) path { transition-delay: 0.07s; }
+.logo .lt:nth-child(3) path { transition-delay: 0.14s; }
+.logo .lt:nth-child(4) path { transition-delay: 0.21s; }
+.logo .lt:nth-child(5) path { transition-delay: 0.28s; }
+
+/* ---------------------------------------------------------------- boot */
+
+.boot {
+  position: absolute !important;
+  inset: 0;
+  z-index: 3 !important;
+  pointer-events: none;
+  display: none;
+  transition: opacity 0.5s ease;
+}
+
+/* the console only exists while booting, and never on the quick (returning / reduced-motion) path */
+.js.booting .boot {
+  display: block;
+}
+
+.quick .boot {
+  display: none !important;
+}
+
+.boot {
+  --count-size: clamp(5rem, 15vw, 13rem);
+}
+
+/* the console sits just above the counter, in the dark lower-left, clear of the orb */
+.boot__log {
+  position: absolute;
+  left: var(--pad);
+  bottom: calc(var(--frame) + 62px + var(--count-size) * 0.8 + 22px);
+  width: min(300px, 70vw);
   list-style: none;
   padding: 0;
+  font-size: 11px;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--dim);
+}
+
+.boot__log li {
   display: flex;
-  flex-wrap: wrap;
-  gap: 0.75rem 2.5rem;
+  justify-content: space-between;
+  padding-block: 4px;
+  opacity: 0;
+  transform: translateY(4px);
+  transition: opacity 0.4s ease, transform 0.4s ease;
 }
 
-.link {
-  font-size: var(--text-link);
-  line-height: 1.2;
-  padding-bottom: 0.25rem;
-  border-bottom: 1px solid var(--color-hairline);
-  transition: border-color 0.4s var(--ease);
+.boot__log li::before {
+  content: "›";
+  margin-right: 8px;
 }
 
-.link:hover,
-.link:focus-visible {
-  border-bottom-color: var(--color-fg);
+.boot__log li span {
+  flex: 1;
 }
 
-.faint {
-  color: var(--color-fg-faint);
+.boot__log b {
+  font-weight: 500;
+  color: var(--paper);
 }
 
-/* Gentle entrance. Runs without JS and never leaves content hidden:
-   `both` lands on the final (fully visible) state. */
-@media (prefers-reduced-motion: no-preference) {
-  .name,
-  .lead,
-  .contacts {
-    animation: rise 0.9s var(--ease) both;
-  }
-  .lead { animation-delay: 0.08s; }
-  .lead--subtle { animation-delay: 0.16s; }
-  .contacts { animation-delay: 0.28s; }
+.boot__log li.on {
+  opacity: 1;
+  transform: none;
 }
 
-@keyframes rise {
-  from {
-    opacity: 0;
-    transform: translateY(24px);
-  }
-  to {
-    opacity: 1;
-    transform: none;
-  }
+.boot__count {
+  position: absolute;
+  left: var(--pad);
+  bottom: calc(var(--frame) + 62px);
+  font-family: var(--font-display);
+  font-size: var(--count-size);
+  font-weight: 300;
+  line-height: 0.8;
+  letter-spacing: 0.01em;
+  font-variant-numeric: tabular-nums;
+  color: var(--paper);
 }
+
+.boot__bar {
+  position: absolute;
+  left: var(--pad);
+  right: var(--pad);
+  bottom: calc(var(--frame) + 50px);
+  height: 1px;
+  background: var(--line);
+}
+
+.boot__bar i {
+  display: block;
+  height: 100%;
+  background: var(--paper);
+  transform: scaleX(0);
+  transform-origin: left;
+}
+
+.boot-done .boot {
+  opacity: 0;
+}
+
+/* ---------------------------------------------------------------- states
+   .booting  → everything waits just off-stage.  .ready → it all settles in. */
+
+.js.booting .frame i:nth-child(odd) { transform: scaleX(0); }
+.js.booting .frame i:nth-child(even) { transform: scaleY(0); }
+.js.booting .dots { opacity: 0; }
+.js.booting .ln > span { transform: translateY(105%); }
+.js.booting .logo path { transform: translateY(112%); }
+.js.booting .rise { opacity: 0; transform: translateY(8px); }
+
+.rise {
+  transition: opacity 0.9s ease 0.5s, transform 0.9s var(--ease) 0.5s;
+}
+
+/* the frame draws in during boot, so it is released before .ready */
+.js.booting.framed .frame i:nth-child(odd) { transform: none; }
+.js.booting.framed .frame i:nth-child(even) { transform: none; }
+
+@keyframes pulse {
+  50% { opacity: 0.25; }
+}
+
+/* ---------------------------------------------------------------- small screens */
 
 @media (max-width: 699.98px) {
-  .page {
-    padding-block: 4rem;
-  }
-  .contacts__list {
-    flex-direction: column;
-    gap: 1rem;
-    align-items: flex-start;
-  }
+  .bar { font-size: 10px; letter-spacing: 0.12em; }
+  .lede { font-size: clamp(2rem, 11.5vw, 3rem); }
+  .bar--bottom span { display: none; }
+  .bar--bottom { justify-content: flex-start; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .dot { animation: none; }
+  .frame i, .ln > span, .logo path, .rise, .orb, .dots, .boot { transition: none; }
 }

@@ -2,14 +2,14 @@
 <html lang="en">
   <head>
     <meta charset="utf-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
     <title>Lucas Cardozo — Product designer</title>
     <meta
       name="description"
       content="Lucas Cardozo is a product designer who thinks in systems, then translates them into interfaces."
     />
     <link rel="canonical" href="https://cardozo.cc/" />
-    <meta name="theme-color" content="#000000" />
+    <meta name="theme-color" content="#050505" />
     <meta name="color-scheme" content="dark" />
 
     <meta property="og:type" content="website" />
@@ -22,33 +22,76 @@
     <meta name="twitter:card" content="summary" />
 
     <link rel="icon" href="favicon.png" type="image/png" sizes="64x64" />
-    <link rel="preload" href="fonts/kanit-500.woff2" as="font" type="font/woff2" crossorigin />
-    <link rel="preload" href="fonts/kanit-300.woff2" as="font" type="font/woff2" crossorigin />
+
+    <!-- Progressive enhancement: the hidden "booting" state exists only when JS runs, and a
+         failsafe lifts it, so the content can never stay invisible. -->
+    <script>
+      (function () {
+        var h = document.documentElement;
+        h.classList.add("js");
+        var reduce = window.matchMedia && matchMedia("(prefers-reduced-motion: reduce)").matches;
+        if (!reduce) {
+          h.classList.add("booting");
+          setTimeout(function () {
+            h.classList.remove("booting");
+          }, 6000);
+        }
+      })();
+    </script>
+
+    <link rel="preload" href="fonts/big-shoulders-display.woff2" as="font" type="font/woff2" crossorigin />
+    <link rel="preload" href="fonts/geist-mono.woff2" as="font" type="font/woff2" crossorigin />
     <link rel="stylesheet" href="style.css" />
   </head>
   <body>
-    <main class="page">
-      <header class="intro">
-        <h1 class="name">Lucas Cardozo</h1>
-        <p class="lead">product designer who thinks in systems,</p>
-        <p class="lead lead--subtle">then translates them into interfaces</p>
+    <main class="hero" id="hero">
+      <canvas class="orb" aria-hidden="true"></canvas>
+      <div class="dots" aria-hidden="true"></div>
+      <div class="frame" aria-hidden="true"><i></i><i></i><i></i><i></i></div>
+
+      <header class="bar bar--top">
+        <span class="rise">Lucas Cardozo</span>
+        <span class="rise">© 2026</span>
       </header>
 
-      <section class="contacts" aria-labelledby="contacts-title">
-        <h2 id="contacts-title" class="label">Contact</h2>
-        <ul class="contacts__list">
-          <li>
-            <a class="link" href="mailto:lucas@cardozo.cc"
-              >lucas<span class="faint">@</span>cardozo<span class="faint">.cc</span></a
-            >
-          </li>
-          <li>
-            <a class="link" href="https://www.linkedin.com/in/cardozolucas/" rel="me noopener"
-              >LinkedIn<span class="faint" aria-hidden="true"> ↗</span></a
-            >
-          </li>
+      <p class="lede">
+        <span class="eyebrow rise"><b class="dot"></b>[ 00 ] · Product designer</span>
+        <span class="ln"><span>Product designer who</span></span>
+        <span class="ln"><span>thinks in systems,</span></span>
+        <span class="ln ln--o"><span>then translates them</span></span>
+        <span class="ln ln--o"><span>into interfaces</span></span>
+      </p>
+
+      <h1 class="logo">
+        <span class="sr-only">Lucas Cardozo — Product designer</span>
+        <svg viewBox="0 0 90 15.75" aria-hidden="true" focusable="false">
+          <g class="lt"><path data-l="C" d="M 8.917 0 C 10.573 0 12.043 0.287 13.325 0.861 C 14.607 1.436 15.636 2.237 16.411 3.266 C 17.199 4.294 17.673 5.497 17.834 6.873 L 12.644 6.873 C 12.524 6.352 12.303 5.911 11.982 5.55 C 11.662 5.176 11.241 4.896 10.72 4.709 C 10.212 4.508 9.611 4.408 8.917 4.408 C 8.142 4.408 7.474 4.548 6.913 4.829 C 6.365 5.096 5.945 5.491 5.651 6.012 C 5.357 6.533 5.21 7.154 5.21 7.875 C 5.21 8.596 5.357 9.217 5.651 9.738 C 5.945 10.246 6.365 10.641 6.913 10.921 C 7.474 11.202 8.142 11.342 8.917 11.342 C 9.611 11.342 10.212 11.254 10.72 11.081 C 11.241 10.894 11.662 10.62 11.982 10.26 C 12.303 9.886 12.524 9.425 12.644 8.877 L 17.834 8.877 C 17.673 10.253 17.199 11.456 16.411 12.484 C 15.636 13.513 14.607 14.314 13.325 14.889 C 12.043 15.463 10.573 15.75 8.917 15.75 C 7.126 15.75 5.563 15.422 4.228 14.768 C 2.892 14.113 1.85 13.198 1.102 12.023 C 0.367 10.834 0 9.451 0 7.875 C 0 6.299 0.367 4.923 1.102 3.747 C 1.85 2.558 2.892 1.637 4.228 0.982 C 5.563 0.328 7.126 0 8.917 0 Z"/></g>
+          <g class="lt"><path data-l="R" d="M 28.751 0.36 C 29.953 0.36 31.003 0.574 31.898 1.002 C 32.806 1.416 33.507 1.997 34.001 2.745 C 34.509 3.493 34.763 4.375 34.763 5.391 C 34.763 6.379 34.509 7.254 34.001 8.016 C 33.507 8.764 32.806 9.345 31.898 9.759 C 31.765 9.82 31.629 9.876 31.49 9.928 L 35.364 15.39 L 29.453 15.39 L 26.041 10.38 L 24.503 10.38 L 24.503 15.39 L 19.334 15.39 L 19.334 0.36 Z M 24.503 6.793 L 27.95 6.793 C 28.458 6.793 28.852 6.673 29.132 6.432 C 29.413 6.192 29.553 5.845 29.553 5.391 C 29.553 4.936 29.413 4.589 29.132 4.348 C 28.852 4.108 28.458 3.987 27.95 3.987 L 24.503 3.987 Z"/></g>
+          <g class="lt"><path data-l="D" d="M 44.84 0.36 C 46.67 0.36 48.266 0.675 49.628 1.302 C 51.004 1.917 52.073 2.785 52.835 3.907 C 53.596 5.03 53.977 6.352 53.977 7.875 C 53.977 9.385 53.596 10.707 52.835 11.842 C 52.073 12.965 51.004 13.84 49.628 14.467 C 48.266 15.082 46.67 15.39 44.84 15.39 L 36.864 15.39 L 36.864 0.36 Z M 41.994 10.781 L 45.24 10.781 C 45.975 10.781 46.603 10.667 47.124 10.44 C 47.658 10.2 48.065 9.865 48.346 9.438 C 48.626 8.997 48.767 8.476 48.767 7.875 C 48.767 7.26 48.626 6.739 48.346 6.312 C 48.065 5.885 47.658 5.557 47.124 5.33 C 46.603 5.089 45.975 4.969 45.24 4.969 L 41.994 4.969 Z"/></g>
+          <g class="lt"><path data-l="Z" d="M 70.325 4.017 L 62.321 11.432 L 70.385 11.432 L 70.385 15.399 L 55.477 15.399 L 55.477 11.733 L 63.498 4.318 L 55.537 4.318 L 55.537 0.351 L 70.325 0.351 Z"/></g>
+          <g class="lt"><path data-l="C" d="M 80.802 0 C 82.459 0 83.928 0.287 85.211 0.861 C 86.493 1.436 87.521 2.237 88.297 3.266 C 89.084 4.294 89.558 5.497 89.719 6.873 L 84.53 6.873 C 84.41 6.352 84.189 5.911 83.868 5.55 C 83.548 5.176 83.126 4.896 82.606 4.709 C 82.098 4.508 81.497 4.408 80.802 4.408 C 80.027 4.408 79.36 4.548 78.798 4.829 C 78.251 5.096 77.83 5.491 77.536 6.012 C 77.242 6.533 77.095 7.154 77.095 7.875 C 77.095 8.596 77.242 9.217 77.536 9.738 C 77.83 10.246 78.251 10.641 78.798 10.921 C 79.36 11.202 80.027 11.342 80.802 11.342 C 81.497 11.342 82.098 11.255 82.606 11.081 C 83.126 10.894 83.548 10.62 83.868 10.26 C 84.189 9.886 84.41 9.425 84.53 8.877 L 89.719 8.877 C 89.558 10.253 89.084 11.456 88.297 12.484 C 87.521 13.513 86.493 14.314 85.211 14.889 C 83.928 15.463 82.459 15.75 80.802 15.75 C 79.013 15.75 77.45 15.422 76.113 14.768 C 74.777 14.113 73.735 13.198 72.987 12.023 C 72.253 10.834 71.885 9.451 71.885 7.875 C 71.885 6.299 72.253 4.923 72.987 3.747 C 73.735 2.558 74.777 1.637 76.113 0.982 C 77.45 0.328 79.013 0 80.802 0 Z"/></g>
+        </svg>
+      </h1>
+
+      <footer class="bar bar--bottom">
+        <span class="rise">Systems → Interfaces</span>
+        <nav class="rise" aria-label="Contact">
+          <a href="mailto:lucas@cardozo.cc">lucas@cardozo.cc</a>
+          <a href="https://www.linkedin.com/in/cardozolucas/" rel="me noopener">LinkedIn&nbsp;↗</a>
+        </nav>
+      </footer>
+
+      <div class="boot" aria-hidden="true">
+        <ul class="boot__log">
+          <li><span>init renderer</span><b>ok</b></li>
+          <li><span>load typefaces</span><b>ok</b></li>
+          <li><span>resolve dither</span><b>ok</b></li>
         </ul>
-      </section>
+        <div class="boot__count" data-count>000</div>
+        <div class="boot__bar"><i data-bar></i></div>
+      </div>
     </main>
+
+    <script type="module" src="hero.js"></script>
   </body>
 </html>
