@@ -123,10 +123,9 @@ a {
   opacity: 0; /* the shader draws it; the SVG stays for layout, hit-testing, focus and screen readers */
 }
 
-.logo .lt,
-.logo .bf {
+.logo .lt {
   transform-box: fill-box;
-  transform-origin: center;
+  transform-origin: center; /* the letter's random orientation (mirrored or not), set by hero.js */
 }
 
 .logo path {
@@ -170,8 +169,13 @@ a {
   outline: none;
 }
 
-.logo .brand {
-  display: none;
+/* With the live dot field, the pointer is drawn in dots (a small atom whose nucleus sits on the hotspot), so the
+   system cursor is hidden: fine pointers only, and never in the no-WebGL or reduced-motion versions. */
+@media (hover: hover) and (pointer: fine) {
+  .gl.live body,
+  .gl.live .logo .ln {
+    cursor: none;
+  }
 }
 
 @media (prefers-reduced-motion: reduce) {
