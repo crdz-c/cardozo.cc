@@ -89,12 +89,18 @@
         </svg>
       </h1>
 
-      <!-- The theme switch. With WebGL the shader draws it as dots (this SVG is only the fallback); the
+      <!-- The theme switch. With WebGL the shader draws it as dots (these SVGs are only the fallback); the
            button itself stays for the pointer, the keyboard and screen readers. -->
       <button class="theme" type="button" aria-label="Switch to light mode">
-        <svg viewBox="0 0 18 18" aria-hidden="true">
-          <circle cx="9" cy="9" r="7.4" fill="none" stroke="currentColor" stroke-width="1.6" />
-          <path d="M9 1.6a7.4 7.4 0 0 0 0 14.8z" fill="currentColor" />
+        <!-- a moon in the dark theme, a sun in the light one (CSS picks) -->
+        <svg class="moon" viewBox="0 0 22 22" aria-hidden="true">
+          <path d="M18.6 14.1A8.6 8.6 0 0 1 7.9 3.4a8.6 8.6 0 1 0 10.7 10.7z" fill="currentColor" />
+        </svg>
+        <svg class="sun" viewBox="0 0 22 22" aria-hidden="true">
+          <circle cx="11" cy="11" r="4.4" fill="currentColor" />
+          <g stroke="currentColor" stroke-width="1.8" stroke-linecap="square">
+            <path d="M11 1.5v3M11 17.5v3M1.5 11h3M17.5 11h3M4.3 4.3l2.1 2.1M15.6 15.6l2.1 2.1M4.3 17.7l2.1-2.1M15.6 6.4l2.1-2.1" />
+          </g>
         </svg>
       </button>
     </main>

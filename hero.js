@@ -74,7 +74,7 @@ const BUILD_RATE = [
   [0.992, 1, 0.51, 0.51, 0], // the last dots land and it stops
 ];
 // The theme switch (top right): its icon lights in once the build is over; a change sweeps out from it, softly.
-const ICON_R = 10; // CSS px: radius of the theme switch's icon
+const ICON_R = 11; // CSS px: radius of the theme switch's icon (a moon in the dark theme, a sun in the light one)
 const ICON_IN_MS = 700;
 const THEME_MS = 1300; // the theme change runs this long: the loading's fill (BUILD_RATE), only much faster, easing out at the end
 const THEME_COLOR = { dark: "#000000", light: "#ffffff" };
@@ -310,15 +310,18 @@ const themeBtn = hero.querySelector(".theme");
 
 // ------------------------------------------------------------------ theme
 // Dark (true black) and light (true white). The first paint already has the right one (index.html). Switching is the
-// loading's fill, only faster: the progress below runs the same rate curve as the build (compressed into THEME_MS,
-// with a soft landing), and in the shader every cell, the background included, flips palette at its own random
-// moment, so the pixels themselves change state, at random, quick first and a few late.
+// loading's fill, only faster, and it spreads out from the switch: the progress below runs the same rate curve as the
+// build (compressed into THEME_MS, with a soft landing), and in the shader every cell, the background included, flips
+// palette when that progress passes its own rank (mostly its distance from the switch, with random per-pixel jitter), so
+// the pixels themselves change state, at random, a front of them moving out from the button.
 const themeCurve = (t) => buildProgress(1 - Math.pow(1 - t, 1.8));
 const theme = {
   mode: html.getAttribute("data-theme") === "light" ? "light" : "dark",
-  amt: 0, from: 0, to: 0, t0: 0, dur: 0,
+  from: 0, to: 0, // 0 dark … 1 light: the state the change leaves and the one it reaches
+  p: 1, // its progress 0..1 (1 at rest)
+  t0: 0, dur: 0,
 };
-theme.amt = theme.from = theme.to = theme.mode === "light" ? 1 : 0;
+theme.from = theme.to = theme.mode === "light" ? 1 : 0;
 const domTheme = (mode) => {
   html.setAttribute("data-theme", mode);
   document.querySelectorAll('meta[name="theme-color"]').forEach((m) => {
@@ -328,14 +331,21 @@ const domTheme = (mode) => {
 };
 function setTheme(mode, store = true) {
   if (mode === theme.mode) return;
-  theme.mode = mode;
-  theme.from = theme.amt;
+  if (theme.dur) {
+    // asked again mid-change: the one running lands at once (a few unflipped pixels jump), the new one starts from there
+    theme.dur = 0;
+    theme.p = 1;
+    domTheme(theme.mode);
+  }
+  theme.from = theme.mode === "light" ? 1 : 0;
   theme.to = mode === "light" ? 1 : 0;
+  theme.mode = mode;
+  theme.p = 0;
   theme.t0 = performance.now();
-  theme.dur = !scene || reduce ? 0 : THEME_MS * Math.max(0.4, Math.abs(theme.to - theme.from));
+  theme.dur = !scene || reduce ? 0 : THEME_MS;
   themeBtn.setAttribute("aria-label", mode === "light" ? "Switch to dark mode" : "Switch to light mode");
   if (!theme.dur) {
-    theme.amt = theme.to;
+    theme.p = 1;
     domTheme(mode);
     scene?.draw();
   }
@@ -350,9 +360,9 @@ function setTheme(mode, store = true) {
 function stepTheme(now) {
   if (!theme.dur) return;
   const t = clamp01((now - theme.t0) / theme.dur);
-  theme.amt = theme.from + (theme.to - theme.from) * themeCurve(t);
+  theme.p = themeCurve(t);
   if (t >= 1) {
-    theme.amt = theme.to;
+    theme.p = 1;
     theme.dur = 0;
     domTheme(theme.mode);
   }
@@ -675,6 +685,7 @@ precision highp float;
 #define LIGHT_OVER 1.25    // …overshoot of the progress, so every dot has arrived by the end…
 #define LIGHT_FLASH 0.3    // …and how long an arriving dot flashes (of the progress)
 #define THEME_SOFT 0.05    // the theme change: each cell fades over this much of the progress (a short, fluid window per pixel)…
+#define THEME_SPATIAL 0.78 // …in an order that is this much its distance from the switch (spreading out), the rest random per pixel…
 #define LIGHT_INK 0.7      // light theme: letters and marks are ink, not dots: extra density, so every cell is lit…
 #define LIGHT_FIELD 1.7    // …the field's dots darken (greys of many tones, for contrast against the black)…
 #define LIGHT_FIELD_DENS 1.35 // …and come a little denser…
@@ -707,7 +718,8 @@ uniform float uFocusAmt;
 uniform sampler2D uMask;
 uniform vec4  uTog;       // the theme switch's icon: centre x, y, radius (cells), lit 0..1
 uniform float uTogHot;    // …hovered / focused 0..1
-uniform float uTheme;     // 0 dark … 1 light (eased in JS; each cell crosses at its own moment)
+uniform vec3  uThemeT;    // the theme change: from, to (0 dark … 1 light), progress 0..1 (1 at rest)
+uniform vec3  uThemeO;    // …where it spreads from: the switch's x, y (device px), and the farthest corner's distance
 
 float hash3(vec3 p) { return fract(sin(dot(p, vec3(127.1, 311.7, 74.7))) * 43758.5453123); }
 // white noise without a tile: every cell its own random number (no sine, so no diagonal artefacts at large coordinates).
@@ -824,12 +836,16 @@ void main() {
   float eNear = uE.z * exp(-pow(rE / (3.0 * uER), 2.0));
   float th = blue(cell);
   float th2 = blue(cell + vec2(29.0, 13.0));
-  // ---- theme: which palette this cell is in. The loading's fill again, only faster: the progress (uTheme, from JS) runs
-  // past every cell's own random rank at some moment (white noise: no tile, no repeat), background cells included, so
-  // the very pixels the dots are made of change state at random, most early and a few late, each over a short fluid window. In the light theme
-  // letters are ink and the field is greys (see the knobs), so the density and tone rules below follow 'flip' too.
+  // ---- theme: which palette this cell is in. The loading's fill again, only faster, spreading out from the switch: the
+  // progress (uThemeT.z, from JS) runs past every cell's own rank at some moment, background cells included, so the
+  // very pixels the dots are made of change state, a front of them moving out from the button. The rank is mostly the
+  // cell's distance from the switch, with white noise per pixel on top (a hash: no tile, no repeat), so the front is a
+  // random dissolve, not a line; each cell fades over a short fluid window. In the light theme letters are ink and the
+  // field is greys (see the knobs), so the density and tone rules below follow 'flip' too.
   float thT = hash12(cell + vec2(17.0, 43.0));
-  float flip = smoothstep(thT - THEME_SOFT, thT + THEME_SOFT, uTheme * (1.0 + 2.0 * THEME_SOFT) - THEME_SOFT);
+  float td = clamp(length(pDev - uThemeO.xy) / max(uThemeO.z, 1.0), 0.0, 1.0);
+  float trk = THEME_SPATIAL * td + (1.0 - THEME_SPATIAL) * thT;
+  float flip = mix(uThemeT.x, uThemeT.y, smoothstep(trk - THEME_SOFT, trk + THEME_SOFT, uThemeT.z * (1.0 + 2.0 * THEME_SOFT) - THEME_SOFT));
   float h = fract(sin(dot(cell, vec2(12.9898, 78.233))) * 43758.5453);
   // every dot has its own slow phase: it breathes in and out rather than popping
   float tw = 0.5 + 0.5 * sin(uTime * (0.45 + 1.1 * h) + h * 60.0);
@@ -931,9 +947,10 @@ void main() {
     letter *= arr;
   }
 
-  // ---- the theme switch's icon (top right): more of the same material, drawn from cell positions that only the
-  // pointer and the waves displace (the curtain's film does not carry it). Its dots light like the loading, only
-  // faster; it sits quieter until hovered. A half-filled ring, the filled half flipping with the theme.
+  // ---- the theme switch's icon (top right): a moon in the dark theme, a sun in the light one, solid pixels. More of the
+  // same material, drawn from cell positions that only the pointer and the waves displace (the curtain's film does not
+  // carry it). Its dots light like the loading, only faster; it sits quieter until hovered. Each cell draws the shape
+  // of the theme it is in (flip), so the icon changes from moon to sun pixel by pixel, with the rest of the screen.
   float ex = 0.0;
   float exTone = 1.0;
   float exFlash = 0.0;
@@ -941,12 +958,16 @@ void main() {
     vec2 tp = c - uTog.xy;
     float R = uTog.z;
     float d = length(tp);
-    float side = tp.x * (uTheme > 0.5 ? -1.0 : 1.0);
-    float cov = max(step(d, R) * step(R - 2.6, d), step(d, R - 4.2) * step(side, 0.0));
+    // moon: a disc with a bite out of its upper right (a crescent opening that way)
+    float moon = step(d, R) * step(0.82 * R, length(tp - vec2(0.42, 0.32) * R));
+    // sun: a small disc and eight short rays (distance to the nearest ray's axis, in cells, under 0.9)
+    float ak = mod(atan(tp.y, tp.x + 0.0001) + 0.3927, 0.7854) - 0.3927;
+    float sun = max(step(d, 0.4 * R), step(abs(sin(ak)) * d, 0.9) * step(0.62 * R, d) * step(d, R));
+    float cov = mix(moon, sun, step(0.5, flip));
     float a = uTog.w * LIGHT_OVER - LIGHT_SOFT;
     float ic = cov * smoothstep(th2 - LIGHT_SOFT, th2 + LIGHT_SOFT, a);
     ex = ic;
-    exTone = 0.85 + 0.15 * uTogHot;
+    exTone = 0.92 + 0.08 * uTogHot;
     exFlash = cov * ic * exp(-max(a - th2, 0.0) / LIGHT_FLASH) * (1.0 - smoothstep(0.8, 1.0, uTog.w));
   }
   if (ex > letter) {
@@ -962,19 +983,19 @@ void main() {
   float lumC = (0.018 + 0.05 * D) * (0.45 + nz) * (1.0 + 0.6 * wave) * ripple * (1.0 - PULSE_THIN * uPulse) * film * rim
     * (1.0 - WREV_THIN * wv.x) * (1.0 - WNULL * wv.y) * mix(1.0, LIGHT_FIELD_DENS, flip)
     + push.z * 0.3 * (0.6 + 0.4 * tw);
-  float lumL = (DENS_L + 0.5 * wave * DENS_WAVE + DENS_E * eNear + push.z * 0.3 + PULSE_L * uPulse + LIGHT_INK * flip)
+  float lumL = (DENS_L + 0.5 * wave * DENS_WAVE + DENS_E * eNear + push.z * 0.3 + PULSE_L * uPulse + LIGHT_INK * flip + 0.6 * ex)
     * mix(TONE_DENS, 1.0, ftone) * (1.0 - MORPH_DIP * dip * (1.0 - ex)) * (1.0 - MELT_DIP * mid * (1.0 - ex))
     * mix(mix(rim, 1.0, k), 1.0, ex) * (1.0 - WNULL * wv.y);
   // letters sit on the checkerboard lattice (so dense dots never fuse; in the light theme they are solid ink instead);
   // the field is free blue noise
-  float site = mix(1.0, 1.0 - mod(cell.x + cell.y, 2.0), smoothstep(0.2, 0.6, letter) * (1.0 - flip));
+  float site = mix(1.0, 1.0 - mod(cell.x + cell.y, 2.0), smoothstep(0.2, 0.6, letter) * (1.0 - flip) * (1.0 - step(0.5, ex)));
   float lum = max(mix(lumC, lumL, letter), 0.0); // (the pointer's thinning can push it below zero)
   // a dot's intensity rises smoothly as the density passes its threshold: changes fade, nothing pops
   // (the fade width scales with the density, so sparse dots still come up to full intensity)
   float on = site * clamp((lum - th) / (DOT_FADE * lum + 0.004), 0.0, 1.0);
   float toneC = (0.48 + 0.12 * D + 0.3 * eNear + 0.3 * push.z) * (1.0 - TWINKLE * tw) * (1.0 - FLICK_C * (1.0 - flick)) * mix(1.0, LIGHT_FIELD, flip);
   float toneL = TONE_L * mix(TONE_BRIGHT, 1.0, ftone) * (1.0 - 0.35 * TWINKLE * tw) * mix(0.72, 1.0, smoothstep(0.75, 1.0, uIntro))
-    * (1.0 - mix(FLICK_L, FLICK_L_INK, flip) * (1.0 - sqrt(flick)));
+    * (1.0 - mix(FLICK_L, FLICK_L_INK, flip) * (1.0 - sqrt(flick)) * (1.0 - ex)); // (the icon does not flicker)
   float tone = mix(mix(toneC, toneL, letter), 1.0, flash);
   vec3 tint = mix(FIELD_TINT, vec3(1.0), max(letter, flash));
 
@@ -1091,7 +1112,7 @@ function createScene() {
   const fbo = gl.createFramebuffer();
 
   const locs = (p, names) => Object.fromEntries(names.map((n) => [n, gl.getUniformLocation(p, n)]));
-  const UF = locs(field, ["uDev", "uE", "uEV", "uER", "uW[0]", "uTime", "uBlue", "uCells", "uCell", "uIntro", "uLogo", "uTexScale", "uTexOff", "uTexPerCell", "uLet[0]", "uBrand", "uRev", "uRep", "uN", "uLink", "uPulse", "uSea", "uEnergy", "uFocus", "uFocusAmt", "uMask", "uTog", "uTogHot", "uTheme"]);
+  const UF = locs(field, ["uDev", "uE", "uEV", "uER", "uW[0]", "uTime", "uBlue", "uCells", "uCell", "uIntro", "uLogo", "uTexScale", "uTexOff", "uTexPerCell", "uLet[0]", "uBrand", "uRev", "uRep", "uN", "uLink", "uPulse", "uSea", "uEnergy", "uFocus", "uFocusAmt", "uMask", "uTog", "uTogHot", "uThemeT", "uThemeO"]);
   const UC = locs(compose, ["uField", "uCells", "uCell"]);
 
   gl.useProgram(field);
@@ -1209,7 +1230,8 @@ function createScene() {
     const [tgx, tgy] = toDev(tr.left + tr.width / 2, tr.top + tr.height / 2);
     gl.uniform4f(UF.uTog, tgx / CELL, tgy / CELL, (ICON_R * dpr) / CELL, state.tog.amt);
     gl.uniform1f(UF.uTogHot, state.tog.hot);
-    gl.uniform1f(UF.uTheme, theme.amt);
+    gl.uniform3f(UF.uThemeT, theme.from, theme.to, theme.p);
+    gl.uniform3f(UF.uThemeO, tgx, tgy, Math.hypot(Math.max(tgx, dev[0] - tgx), Math.max(tgy, dev[1] - tgy)));
     gl.drawArrays(gl.TRIANGLES, 0, 3);
 
     // pass 2: compose at device pixels

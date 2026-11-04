@@ -164,13 +164,13 @@ a {
 
 
 /* ---------------------------------------------------------------- the theme switch
-   A 44 px target in the top-right corner (the 20 px icon sits at --pad from the edges). With WebGL the shader draws the icon in dots (the SVG is invisible but
+   A 44 px target in the top-right corner (the 22 px icon sits at --pad from the edges). With WebGL the shader draws the icon in dots (the SVG is invisible but
    stays for layout, hit-testing, focus and screen readers); without it the SVG is the icon. It waits for the build. */
 
 .theme {
   position: absolute;
-  top: calc(var(--pad) - 12px);
-  right: calc(var(--pad) - 12px);
+  top: calc(var(--pad) - 11px);
+  right: calc(var(--pad) - 11px);
   z-index: 2;
   display: none;
   width: 44px;
@@ -195,8 +195,21 @@ a {
 
 .theme svg {
   display: block;
-  width: 18px;
-  height: 18px;
+  width: 22px;
+  height: 22px;
+}
+
+/* a moon in the dark theme, a sun in the light one */
+.theme .sun {
+  display: none;
+}
+
+:root[data-theme="light"] .theme .moon {
+  display: none;
+}
+
+:root[data-theme="light"] .theme .sun {
+  display: block;
 }
 
 .gl .theme svg {
