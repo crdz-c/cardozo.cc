@@ -1,38 +1,14 @@
-/* cardozo.cc — single intro page.
-   Tokens mirror the Astro rebuild (black page, white type on an opacity ramp, Kanit). */
-
-@font-face {
-  font-family: "Kanit";
-  font-style: normal;
-  font-weight: 300;
-  font-display: swap;
-  src: url("fonts/kanit-300.woff2") format("woff2");
-}
-
-@font-face {
-  font-family: "Kanit";
-  font-style: normal;
-  font-weight: 500;
-  font-display: swap;
-  src: url("fonts/kanit-500.woff2") format("woff2");
-}
+/* cardozo.cc — one screen: the CRDZC wordmark, centred. Each letter is a link. With WebGL a shader draws it
+   as dots (see hero.js); the inline SVG underneath is the accessible version and the fallback. Visual
+   direction borrowed in spirit (not code) from christendijoux.com. */
 
 :root {
-  --color-bg: #000;
-  --color-fg: #fff;
-  --color-fg-subtle: rgba(255, 255, 255, 0.5);
-  --color-fg-faint: rgba(255, 255, 255, 0.25);
-  --color-hairline: rgba(255, 255, 255, 0.1);
+  --ink: #000;
+  --paper: #f2f2ee;
 
-  --font-sans: "Kanit", system-ui, -apple-system, "Segoe UI", sans-serif;
 
-  --text-name: clamp(2.75rem, 8vw, 4.4375rem);
-  --text-lead: clamp(1.375rem, 3vw, 1.75rem);
-  --text-link: clamp(1.125rem, 2.2vw, 1.375rem);
-  --text-label: 0.8125rem;
-
-  --gutter: clamp(1.5rem, 10vw, 16rem);
-  --ease: cubic-bezier(0.22, 1, 0.36, 1);
+  --pad: clamp(16px, 2.8vw, 40px);
+  --ease: cubic-bezier(0.16, 1, 0.3, 1);
 
   color-scheme: dark;
 }
@@ -49,24 +25,16 @@
 
 html {
   -webkit-text-size-adjust: 100%;
+  background: var(--ink);
 }
 
 body {
-  min-height: 100vh;
-  min-height: 100svh;
-  background: var(--color-bg);
-  color: var(--color-fg);
-  font-family: var(--font-sans);
-  font-weight: 300;
-  line-height: 1.4;
+  background: var(--ink);
+  color: var(--paper);
+  font-family: system-ui, sans-serif;
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
   text-rendering: optimizeLegibility;
-}
-
-::selection {
-  background: var(--color-fg);
-  color: var(--color-bg);
 }
 
 a {
@@ -74,104 +42,142 @@ a {
   text-decoration: none;
 }
 
-:focus-visible {
-  outline: 2px solid var(--color-fg);
-  outline-offset: 4px;
+::selection {
+  background: var(--paper);
+  color: var(--ink);
 }
 
-.page {
-  min-height: 100vh;
-  min-height: 100svh;
+:focus-visible {
+  outline: 1px solid var(--paper);
+  outline-offset: 3px;
+}
+
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  margin: -1px;
+  padding: 0;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  white-space: nowrap;
+  border: 0;
+}
+
+/* ---------------------------------------------------------------- stage */
+
+.hero {
+  position: relative;
+  isolation: isolate;
   display: flex;
   flex-direction: column;
-  justify-content: center;
-  gap: clamp(3.5rem, 9vh, 6rem);
-  padding: 6rem var(--gutter);
+  justify-content: space-between;
+  height: 100vh;
+  height: 100svh;
+  min-height: 520px;
+  padding: var(--pad);
+  background: var(--ink);
+  overflow: hidden;
 }
 
-.name {
-  font-weight: 500;
-  font-size: var(--text-name);
-  line-height: 0.95;
-  letter-spacing: -0.01em;
-  margin-bottom: clamp(1.75rem, 4vh, 2.75rem);
+.scene {
+  position: absolute;
+  inset: 0;
+  z-index: 0;
+  width: 100%;
+  height: 100%;
+  display: block;
+  image-rendering: pixelated; /* crisp cells when the canvas is upscaled on high-DPI screens */
+  opacity: 0;
+  transition: opacity 1.2s ease;
 }
 
-.lead {
-  font-size: var(--text-lead);
-  line-height: 1.07;
+.gl .scene {
+  opacity: 1;
 }
 
-.lead--subtle {
-  color: var(--color-fg-subtle);
+/* ---------------------------------------------------------------- the logo
+   Centred. The SVG is the real, accessible wordmark and the no-WebGL fallback; once WebGL is running
+   the canvas draws it instead. */
+
+.logo {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  z-index: 1;
+  width: clamp(190px, 39vw, 690px);
+  margin: 0;
+  line-height: 0;
+  transform: translate(-50%, -50%);
 }
 
-.label {
-  font-weight: 300;
-  font-size: var(--text-label);
-  line-height: 1.2;
-  letter-spacing: 0.2em;
-  text-transform: uppercase;
-  color: var(--color-fg-subtle);
-  margin-bottom: 1rem;
+.logo svg {
+  display: block;
+  width: 100%;
+  height: auto;
+  overflow: hidden;
+  fill: var(--paper);
 }
 
-.contacts__list {
-  list-style: none;
-  padding: 0;
-  display: flex;
-  flex-wrap: wrap;
-  gap: 0.75rem 2.5rem;
+.gl .logo svg {
+  opacity: 0; /* the shader draws it; the SVG stays for layout, hit-testing, focus and screen readers */
 }
 
-.link {
-  font-size: var(--text-link);
-  line-height: 1.2;
-  padding-bottom: 0.25rem;
-  border-bottom: 1px solid var(--color-hairline);
-  transition: border-color 0.4s var(--ease);
+.logo .lt {
+  transform-box: fill-box;
+  transform-origin: center; /* the letter's random orientation (mirrored or not), set by hero.js */
 }
 
-.link:hover,
-.link:focus-visible {
-  border-bottom-color: var(--color-fg);
+.logo path {
+  transform-box: fill-box;
+  transform-origin: 50% 100%;
+  transition: transform 1.25s var(--ease);
 }
 
-.faint {
-  color: var(--color-fg-faint);
-}
+.logo .lt:nth-child(2) path { transition-delay: 0.07s; }
+.logo .lt:nth-child(3) path { transition-delay: 0.14s; }
+.logo .lt:nth-child(4) path { transition-delay: 0.21s; }
+.logo .lt:nth-child(5) path { transition-delay: 0.28s; }
 
-/* Gentle entrance. Runs without JS and never leaves content hidden:
-   `both` lands on the final (fully visible) state. */
-@media (prefers-reduced-motion: no-preference) {
-  .name,
-  .lead,
-  .contacts {
-    animation: rise 0.9s var(--ease) both;
-  }
-  .lead { animation-delay: 0.08s; }
-  .lead--subtle { animation-delay: 0.16s; }
-  .contacts { animation-delay: 0.28s; }
-}
+/* ---------------------------------------------------------------- states
+   .booting  → everything waits just off-stage.  .ready → it all settles in. */
 
-@keyframes rise {
-  from {
-    opacity: 0;
-    transform: translateY(24px);
-  }
-  to {
-    opacity: 1;
-    transform: none;
-  }
-}
+.js.booting .logo path { transform: translateY(112%); }
+
+
+/* ---------------------------------------------------------------- small screens */
 
 @media (max-width: 699.98px) {
-  .page {
-    padding-block: 4rem;
+  .logo { width: 60vw; }
+}
+
+/* ---------------------------------------------------------------- letters are links
+   Each letter is an SVG <a> (with a transparent hit box over its column). With WebGL the shader draws the
+   letters, so the SVG is invisible but still there: opacity, not visibility, keeps hit-testing, the cursor,
+   keyboard focus and screen readers working. Focus is drawn in dots by the shader. */
+
+.logo .ln {
+  cursor: pointer;
+}
+
+.logo .ln:focus-visible {
+  outline: 1px solid var(--paper);
+  outline-offset: 2px;
+}
+
+.gl .logo .ln:focus-visible {
+  outline: none;
+}
+
+/* With the live dot field, the pointer is drawn in dots (a small atom whose nucleus sits on the hotspot), so the
+   system cursor is hidden: fine pointers only, and never in the no-WebGL or reduced-motion versions. */
+@media (hover: hover) and (pointer: fine) {
+  .gl.live body,
+  .gl.live .logo .ln {
+    cursor: none;
   }
-  .contacts__list {
-    flex-direction: column;
-    gap: 1rem;
-    align-items: flex-start;
-  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .logo path, .scene { transition: none; }
 }
