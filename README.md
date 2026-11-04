@@ -2,15 +2,15 @@
 
 Source of [cardozo.cc](https://cardozo.cc) — Lucas Cardozo, product designer.
 
-One screen for now: the **CRDZC** wordmark, centred, as a flat WebGL object whose letters flip when you
-touch them, sitting in a cloud of dithered pixels that is fine and dense around it and coarser and sparser
-toward the edges. A bordered container holds the links. No build step, no dependencies. This repo is where
-the full site (portfolio, case studies) will live later.
+One screen for now: the **CRDZC** wordmark, centred, as a WebGL object whose letters flip when you touch
+them, sitting in a field of fine dithered pixels that is continuous grain around it and thins into a
+sparse dot grid toward the edges. A bordered container holds the links. No build step, no dependencies.
+This repo is where the full site (portfolio, case studies) will live later.
 
 ```
 index.html   the page; the wordmark is inline SVG, one <path> per letter (also the no-WebGL fallback)
 style.css    ink stage, paper type, hairlines; logo size; the link container
-hero.js      boot sequence, wordmark + pixel-cloud shader, per-letter flips
+hero.js      boot sequence, blue-noise map, wordmark + pixel-field shader, light spring, per-letter flips
 fonts/       Big Shoulders Display (boot counter) + Geist Mono (labels), self-hosted, OFL
 CNAME        custom domain for GitHub Pages
 ```
@@ -27,28 +27,46 @@ Open <http://localhost:8000>. The boot sequence plays once per browser session; 
 
 ## How the hero works
 
-- **The logo is the scene.** `hero.js` rasterises the SVG paths once and derives, per texel, coverage, a bevel
-  height (distance to the nearest edge) and an outer glow. One fragment shader draws the wordmark: letters
-  are flat and nearly solid; a point light follows the pointer and decides how much 8×8 Bayer dither shows
-  through; slow noise makes the outlines breathe, more so right under the light. With no pointer, the light
-  sweeps back and forth across the wordmark by itself.
+- **Grain.** The canvas runs at one texel per dither cell and is upscaled by an integer factor
+  (`image-rendering: pixelated`), so every cell is a crisp square. A cell is ~1/80 of the wordmark's height,
+  clamped to 1–1.5 CSS px and never under 2 device px (1.5 px on a 2× laptop, 1 px on phones). Fine cells
+  are dithered against a 64×64 **blue-noise** threshold map generated at load (void-and-cluster), so there is
+  no Bayer lattice and no moiré.
+- **Density, not cell size, carries the gradient.** The screen is a quadtree of 8 / 4 / 1-cell blocks; a block
+  subdivides only where the local density (a noise-warped ellipse fitted to the screen, plus the light) beats a
+  jittered threshold. Every dot is the same size: at the edges one dot per 8 or 4 cells (a quiet grid, dim and
+  slowly twinkling), around the wordmark continuous grain. The transition is stochastic, so there are no rings.
+  The wordmark and an oval around it always get full resolution. Tunables: thresholds `0.2` / `0.44` and
+  jitter in `main()`, falloff in `fieldAt()`.
+- **No glow, no outline.** The cloud's grain is even across the screen (organic noise patches, no pool behind
+  the wordmark); only its *structure* changes from grid to fine grain, and only the pointer brightens it.
+  Letters have no moat or halo ring: a signed distance to the edge (texture G inside, B outside) makes each
+  letter's edge a ~2-cell dithered transition, so the field runs straight up to it.
+- **Balloon letters.** Texture A holds an inflated height (quarter-circle profile over the inside distance,
+  blurred 3 × 9 texels so the spine rounds off). Its normals take a soft key light from the upper left and the
+  pointer light: low-contrast diffuse, a fresnel "sky" tone, and specular highlights that show as brighter,
+  denser cells plus a few crisp glint cells. `INFLATE` in the shader sets how puffy they look. Tones: ink
+  #060606, paper #f0efea, far dots ~0.25, cloud ~0.31, letters ~0.66 rising to 1 in the highlights.
+- **Float.** Each letter bobs, sways and tilts on its own slow, desynchronised sines (`updateFloats`), and
+  lifts and leans away a little when the pointer comes near.
+- **Light.** An exponential (long, soft) falloff whose edge is bent by slow noise, breathing slightly, and
+  stretched into a short tail behind its motion. It hangs on a spring (lags, swings a little past, settles).
+  It always moves the gloss on the letters; it brightens and sharpens the field only while someone is
+  pointing. With no pointer for 3 s it wanders slowly over the wordmark on two incommensurate sines.
 - **Flips.** Every letter starts in a **random orientation** on each load (flipped horizontally, vertically,
   both, or not at all). After that a letter only changes **on hover**: moving the pointer onto it (or tapping
-  it on touch screens) flips it around its own centre, horizontally or vertically at random (scale through
-  zero in the shader). `HORIZONTAL_BIAS` in `hero.js` sets the odds per letter — C and D look the same flipped
-  vertically, so they lean horizontal.
-- **Pixel cloud.** Around the wordmark, pixels are **fine and dense at the centre and grow coarser and sparser
-  toward the edges** — both the cell size and the density follow one gradient, measured relative to the screen
-  so it is an ellipse inscribed in any shape (wide desktop, tall phone) and warped by slow noise so it reads
-  like a cloud. A thin clean moat keeps the letters crisp. The base cell scales with the wordmark.
-- **Hover sharpens.** Hovering makes the whole field a little finer and a lot finer around the pointer, in a
-  lens with a noise-wobbled edge, and the dots there burn brighter.
+  it on touch screens) turns it over around its own centre, horizontally or vertically at random, like a
+  balloon: 760–980 ms, quart in-out with a small overshoot and settle, a slight lift, its normals rotating so
+  the highlight sweeps across, its edge softening while edge-on. `HORIZONTAL_BIAS` in `hero.js` sets the odds
+  per letter — C and D look the same flipped vertically, so they lean horizontal.
 - **Links.** One bordered container, hairline-separated cells, wrapping 3×2 on phones. Hover inverts a cell.
-- **Boot** (~3 s, first visit per session): console lines, a counter and a progress line; just before the
-  counter lands the letters rise one by one while the pixels resolve from coarse to fine.
+- **Boot** (~3.5 s, first visit per session): console lines, a counter and a progress line; as the counter
+  nears 100 the field fills in from nothing and the letters dissolve in through the dither one by one,
+  drifting up slightly. Returning visitors get only the 1.6 s entrance.
 - **Size.** The wordmark is 52 vw wide (80 vw under 700 px), vertically centred. Change `.logo { width }`.
 - **Degrades**: no JS → static page with the SVG wordmark. No WebGL → same SVG, with the same random
-  orientations and hover flips. `prefers-reduced-motion` → no boot, no flips, no animation, one still frame.
+  orientations and hover flips. `prefers-reduced-motion` → no boot, no flips, no float, one still frame with the light parked above
+  the wordmark's upper left.
 
 Visual direction is inspired by christendijoux.com; the shader, motion and code here are original.
 

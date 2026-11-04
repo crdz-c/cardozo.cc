@@ -40,6 +40,7 @@ const LETTER_EDGES = [-1, 18.55 / 90, 36.15 / 90, 54.75 / 90, 71.15 / 90, 2]; //
 // C and D look identical flipped vertically, so they lean horizontal; R and Z are fair game
 const HORIZONTAL_BIAS = [0.8, 0.5, 0.8, 0.5, 0.8];
 const flipUniform = new Float32Array(LETTERS * 2).fill(1);
+const turnUniform = new Float32Array(LETTERS * 2);
 const flips = Array.from({ length: LETTERS }, () => ({
   mx: Math.random() < 0.5 ? 1 : -1, // random starting orientation, every load
   my: Math.random() < 0.5 ? 1 : -1,
@@ -77,24 +78,72 @@ function updateFlips(now) {
   flips.forEach((f, i) => {
     let sx = f.mx;
     let sy = f.my;
+    let tx = 0;
+    let ty = 0;
+    f.lift = 0;
     if (f.flipping) {
       const t = clamp01((now - f.t0) / f.dur);
-      // quart in-out: the letter leaves slowly, snaps through edge-on, and settles softly
-      const s = Math.cos(Math.PI * easeInOutQuart(t));
-      if (f.axis === "x") sx = f.mx * s;
-      else sy = f.my * s;
+      // a balloon turning over: slow to leave, quick through edge-on, a little past, then settle back
+      const over = 0.09 * Math.sin(Math.PI * clamp01((t - 0.5) / 0.5));
+      const a = Math.PI * (easeInOutQuart(t) + over);
+      const c = Math.cos(a);
+      const sn = Math.sin(a);
+      if (f.axis === "x") {
+        sx = f.mx * c;
+        tx = sn;
+      } else {
+        sy = f.my * c;
+        ty = sn;
+      }
+      f.lift = Math.sin(Math.PI * t); // it rises a touch while it turns
       if (t >= 1) {
         if (f.axis === "x") f.mx *= -1;
         else f.my *= -1;
         sx = f.mx;
         sy = f.my;
+        tx = ty = 0;
+        f.lift = 0;
         f.flipping = false;
       }
     }
     flipUniform[i * 2] = sx;
     flipUniform[i * 2 + 1] = sy;
+    turnUniform[i * 2] = tx;
+    turnUniform[i * 2 + 1] = ty;
   });
   if (!scene) flipSvg();
+}
+
+// ------------------------------------------------------------------ floating
+// Each letter bobs, sways and tilts on its own slow, desynchronised sines, and leans gently away
+// from a nearby pointer. Values are in wordmark units (x: widths, y: heights) and radians.
+const floatUniform = new Float32Array(LETTERS * 3);
+const LETTER_CENTERS = [8.9 / 90, 27.35 / 90, 45.45 / 90, 62.95 / 90, 80.8 / 90];
+const floats = Array.from({ length: LETTERS }, () => ({
+  ph: Math.random() * Math.PI * 2,
+  sp: rand(0.85, 1.15),
+  lift: 0, // eased pointer response
+  lean: 0,
+}));
+
+function updateFloats(t, dt) {
+  const [l, top, w, h] = state.logoCss;
+  const hr = hero.getBoundingClientRect();
+  const px = state.target[0] + hr.left;
+  const py = state.target[1] + hr.top;
+  const k = 1 - Math.exp(-dt * 3);
+  floats.forEach((f, i) => {
+    const cx = l + LETTER_CENTERS[i] * w;
+    const cy = top + h / 2;
+    const near = state.hover * Math.exp(-(((px - cx) / (w * 0.14)) ** 2 + ((py - cy) / (h * 1.2)) ** 2));
+    f.lift += k * (near * 0.05 - f.lift);
+    f.lean += k * (near * clamp((cx - px) / (w * 0.1), -1, 1) * 0.035 - f.lean);
+    const s = t * f.sp;
+    floatUniform[i * 3] = 0.0022 * Math.sin(s * 0.41 + f.ph * 3);
+    floatUniform[i * 3 + 1] =
+      0.032 * Math.sin(s * 0.57 + f.ph) + 0.012 * Math.sin(s * 1.19 + f.ph * 2) + f.lift + 0.05 * flips[i].lift;
+    floatUniform[i * 3 + 2] = 0.022 * Math.sin(s * 0.46 + f.ph * 1.7) + f.lean;
+  });
 }
 
 function measureLogo() {
@@ -123,13 +172,16 @@ function pointerLetter(e, force) {
 
 // ------------------------------------------------------------------ wordmark texture
 // The SVG paths are rasterised once; from that we derive, per texel:
-//   R coverage · G depth inside the letter (distance to its edge) · B halo outside the letters.
+//   R coverage · G distance to the edge inside a letter · B closeness to a letter outside it ·
+//   A the balloon height (see below).
+// G and B together give the shader a signed distance to the edge, used for a soft dithered edge.
 const VBW = 90;
 const VBH = 15.75;
 const TEXELS_PER_UNIT = 22;
-const MARGIN = 110; // transparent border (texels) so the halo fits and sampling past the edge reads 0
-const DEPTH = 30; // texels: how far in from an edge the "depth" keeps growing
-const HALO = 90; // texels: reach of the dark halo around the letters
+const MARGIN = 110; // transparent border (texels) so the outer field fits and sampling past the edge reads 0
+const DEPTH = 55; // texels: range of the inside distance (≈ half a stroke: the balloon's full height)
+const HALO = 90; // texels: range of the outside distance
+const BLUR = 9; // texels: radius of each of the three box-blur passes on the balloon height
 
 function distanceTransform(mask, w, h, seed) {
   // two-pass chamfer (3-4), returns thirds of a texel; 0 where mask === seed
@@ -167,6 +219,31 @@ function distanceTransform(mask, w, h, seed) {
   return d;
 }
 
+// separable box blur (radius r texels), three passes of which approximate a gaussian
+function boxBlur(src, w, h, r) {
+  const tmp = new Float32Array(w * h);
+  const out = new Float32Array(w * h);
+  const k = 1 / (2 * r + 1);
+  for (let y = 0; y < h; y++) {
+    const row = y * w;
+    let acc = 0;
+    for (let x = -r; x <= r; x++) acc += src[row + clamp(x, 0, w - 1)];
+    for (let x = 0; x < w; x++) {
+      tmp[row + x] = acc * k;
+      acc += src[row + Math.min(x + r + 1, w - 1)] - src[row + Math.max(x - r, 0)];
+    }
+  }
+  for (let x = 0; x < w; x++) {
+    let acc = 0;
+    for (let y = -r; y <= r; y++) acc += tmp[clamp(y, 0, h - 1) * w + x];
+    for (let y = 0; y < h; y++) {
+      out[y * w + x] = acc * k;
+      acc += tmp[Math.min(y + r + 1, h - 1) * w + x] - tmp[Math.max(y - r, 0) * w + x];
+    }
+  }
+  return out;
+}
+
 function buildWordmarkTexture() {
   const cw = Math.round(VBW * TEXELS_PER_UNIT);
   const ch = Math.round(VBH * TEXELS_PER_UNIT);
@@ -192,12 +269,21 @@ function buildWordmarkTexture() {
   const inside = distanceTransform(solid, tw, th, 0); // letter texels: distance to the nearest outside texel
   const outside = distanceTransform(solid, tw, th, 1); // outside texels: distance to the nearest letter texel
 
+  // A: the balloon's height. A quarter-circle profile over the inside distance, then blurred, so the
+  // ridge along each stroke's spine rounds off and highlights become soft spots instead of lines.
+  let height = new Float32Array(n);
+  for (let i = 0; i < n; i++) {
+    const x = 1 - clamp01(inside[i] / 3 / DEPTH);
+    height[i] = solid[i] ? Math.sqrt(1 - x * x) : 0;
+  }
+  height = boxBlur(boxBlur(boxBlur(height, tw, th, BLUR), tw, th, BLUR), tw, th, BLUR);
+
   const data = new Uint8Array(n * 4);
   for (let i = 0; i < n; i++) {
     data[i * 4] = rgba[i * 4];
     data[i * 4 + 1] = Math.round(clamp01(inside[i] / 3 / DEPTH) * 255);
     data[i * 4 + 2] = Math.round(clamp01(1 - outside[i] / 3 / HALO) * 255);
-    data[i * 4 + 3] = 255;
+    data[i * 4 + 3] = Math.round(clamp01(height[i]) * 255);
   }
   return { data, tw, th, cw, ch };
 }
@@ -301,6 +387,9 @@ void main() { gl_Position = vec4(position, 0.0, 1.0); }
 
 const FRAG = `
 precision highp float;
+#define DEPTH_TX ${DEPTH.toFixed(1)}
+#define HALO_TX ${HALO.toFixed(1)}
+#define INFLATE 0.6
 
 uniform vec4  uView;      // x, y (bottom-left), w, h of the visible screen, in cells
 uniform float uTime;
@@ -312,10 +401,14 @@ uniform vec4  uLogo;      // x, y (bottom-left), w, h of the wordmark, in cells
 uniform vec2  uTexScale;  // content size / texture size
 uniform vec2  uTexOff;    // margin / texture size
 uniform vec2  uFlip[5];   // per letter: horizontal / vertical scale (-1..1, 0 = edge-on mid-flip)
+uniform vec2  uTurn[5];   // per letter: sine of the turn angle, horizontal / vertical (0 at rest)
+uniform vec3  uFloat[5];  // per letter: float offset x, y (wordmark units) and tilt (radians)
+uniform vec2  uTexSize;
 uniform vec3  uInk;
 uniform vec3  uPaper;
 uniform sampler2D uMask;
 uniform sampler2D uBlue;
+uniform float uTexPerCell; // wordmark texels per cell
 
 float hash3(vec3 p) {
   return fract(sin(dot(p, vec3(127.1, 311.7, 74.7))) * 43758.5453123);
@@ -354,7 +447,7 @@ float lightAt(vec2 p) {
   ) - 0.5;
   float r = length(d * vec2(0.85, 1.0) + w * 0.24);
   float breathe = 1.0 + 0.08 * sin(uTime * 0.83) + 0.05 * sin(uTime * 1.37 + 1.0);
-  return exp(-r * 5.2 / breathe);
+  return exp(-r * 6.0 / breathe);
 }
 
 // --- the field: 1 at the wordmark, falling off toward the edges as an ellipse fitted to the screen,
@@ -373,7 +466,7 @@ float fieldAt(vec2 p) {
 
 // density: how much detail a spot gets. "lt" returns the light there; the result also drives tone.
 float densityAt(vec2 p, out float lt) {
-  lt = lightAt(p) * (0.45 + 0.55 * uHover);
+  lt = lightAt(p) * uHover; // the field only lights up where someone is pointing
   float yv = (p.y - uView.y) / uView.w;
   float calm = smoothstep(0.0, 0.15, min(yv, 1.0 - yv)); // breathing room behind the labels
   float fill = smoothstep(0.0, 1.0, uIntro * 1.25);
@@ -382,8 +475,8 @@ float densityAt(vec2 p, out float lt) {
 
 // the wordmark and a soft oval around it always get full resolution, whatever the screen shape
 float keepFine(vec2 p) {
-  vec2 e = (p - (uLogo.xy + 0.5 * uLogo.zw)) / (uLogo.zw * vec2(0.62, 1.9));
-  return 1.0 - smoothstep(0.8, 1.0, length(e));
+  vec2 e = (p - (uLogo.xy + 0.5 * uLogo.zw)) / (uLogo.zw * vec2(0.75, 2.0));
+  return 1.0 - smoothstep(0.55, 1.0, length(e));
 }
 
 // which of the five letters this x belongs to (C R D Z C)
@@ -411,6 +504,20 @@ vec2 flipFor(float li) {
   }
   // never exactly zero: the letter collapses to a hairline instead of dividing by zero
   return vec2(f.x < 0.0 ? min(f.x, -0.02) : max(f.x, 0.02), f.y < 0.0 ? min(f.y, -0.02) : max(f.y, 0.02));
+}
+vec2 turnFor(float li) {
+  vec2 f = vec2(0.0);
+  for (int i = 0; i < 5; i++) {
+    if (abs(float(i) - li) < 0.5) f = uTurn[i];
+  }
+  return f;
+}
+vec3 floatFor(float li) {
+  vec3 f = vec3(0.0);
+  for (int i = 0; i < 5; i++) {
+    if (abs(float(i) - li) < 0.5) f = uFloat[i];
+  }
+  return f;
 }
 vec4 maskAt(vec2 tc) {
   float inside = step(0.0, tc.x) * step(tc.x, 1.0) * step(0.0, tc.y) * step(tc.y, 1.0);
@@ -450,26 +557,23 @@ void main() {
     float present = step(h, (0.45 + 1.4 * D) * smoothstep(0.0, 0.7, uIntro));
     float twinkle = 0.82 + 0.18 * sin(uTime * (0.5 + h) + h * 40.0);
     on = isDot * present;
-    tone = (0.23 + 0.4 * D + 0.4 * lt) * twinkle;
+    tone = (0.24 + 0.14 * D + 0.4 * lt) * twinkle;
   } else {
     // ---- fine field: the wordmark and the cloud around it, dithered cell by cell
     vec2 c = cell + 0.5;
-    vec2 q0 = (c - uLogo.xy) / uLogo.zw;
+    vec2 q = (c - uLogo.xy) / uLogo.zw;
     float aspect = uLogo.z / uLogo.w;
 
-    // the outlines bend a touch, and only where the light is
-    vec2 qa0 = vec2(q0.x * aspect, q0.y);
-    vec2 wob = vec2(
-      vnoise(vec3(qa0 * 2.2, uTime * 0.3)),
-      vnoise(vec3(qa0 * 2.2 + vec2(7.3, 2.9), uTime * 0.27))
-    ) - 0.5;
-    float amp = 0.012 * lt * uHover;
-    vec2 q = q0 + vec2(wob.x * amp / aspect, wob.y * amp) * 2.0;
-
+    // each letter floats on its own: offset (in wordmark units) and a small tilt, then the flip
     float li = letterIndex(q.x);
     vec2 fs = flipFor(li);
+    vec2 tn = turnFor(li);
+    vec3 fl = floatFor(li);
     float cu = letterCenter(li);
-    vec2 qf = vec2(cu + (q.x - cu) / fs.x, 0.5 + (q.y - 0.5) / fs.y);
+    vec2 L = vec2((q.x - cu - fl.x) * aspect, q.y - 0.5 - fl.y);
+    float ca = cos(fl.z), sa = sin(fl.z);
+    L = vec2(ca * L.x + sa * L.y, -sa * L.x + ca * L.y);
+    vec2 qf = vec2(cu + L.x / (fs.x * aspect), 0.5 + L.y / fs.y);
     vec2 bnd = letterBounds(li);
     float inBox = step(bnd.x, qf.x) * step(qf.x, bnd.y) * step(-0.05, qf.y) * step(qf.y, 1.05);
 
@@ -478,31 +582,69 @@ void main() {
     float eo = 1.0 - pow(1.0 - e, 3.0);
     vec2 rise = vec2(0.0, 0.18 * (1.0 - eo));
 
-    vec4 t = maskAt((qf + rise) * uTexScale + uTexOff);
-    float cov = smoothstep(0.4, 0.6, t.r) * inBox;
-    float depth = t.g;
-    float halo = maskAt((q + rise) * uTexScale + uTexOff).b;
+    vec2 tc = (qf + rise) * uTexScale + uTexOff;
+    vec4 t = maskAt(tc);
+    // signed distance to the letter's edge, in cells (+ inside, - outside), from the two distance fields
+    // (a squeezed letter packs more texels per cell, so its edge softens while it turns)
+    float tpc = uTexPerCell / max(min(abs(fs.x), abs(fs.y)), 0.15);
+    float sd = (t.r > 0.5 ? t.g * DEPTH_TX : -(1.0 - t.b) * HALO_TX) / tpc;
+    // no outline, no moat: the letter is just more likely to be "letter" the deeper in you are, so its
+    // edge is a ~2-cell dithered transition and the field runs straight up to it
+    float cov = smoothstep(-1.1, 1.1, sd) * inBox;
+    float pick = step(blue(cell + vec2(23.0, 41.0)), cov);
 
     float th = blue(cell);
-
-    // letters: restrained paper, a soft grain that thickens toward the edges, brighter in the light,
-    // dimmer while edge-on in a flip
     vec2 pc = (c - (uLogo.xy + 0.5 * uLogo.zw)) / uView.w;
     float nz = vnoise(vec3(pc * 4.5, uTime * 0.07)) * 0.65 + vnoise(vec3(pc * 11.0 + 3.0, uTime * 0.11)) * 0.35;
 
-    float edgeOn = abs(fs.x * fs.y);
-    float lumL = (1.02 - 0.08 * nz - 0.4 * (1.0 - smoothstep(0.0, 0.32, depth)) + 0.06 * lt) * smoothstep(0.0, 1.0, eo * 1.1);
-    float onL = step(th, lumL * (0.75 + 0.25 * edgeOn));
-    float toneL = (0.8 + 0.18 * lt) * (0.6 + 0.4 * edgeOn);
+    // ---- letters as balloons: a pillowy height from the inside distance (circular profile), lit softly
+    float lum = 0.0;
+    float toneL = 0.0;
+    if (cov > 0.0) {
+      vec2 dt = 2.5 / uTexSize;
+      float hx = maskAt(tc + vec2(dt.x, 0.0)).a - maskAt(tc - vec2(dt.x, 0.0)).a;
+      float hy = maskAt(tc + vec2(0.0, dt.y)).a - maskAt(tc - vec2(0.0, dt.y)).a;
+      // the height is DEPTH texels tall at its crown; INFLATE < 1 flattens it (a softer, fuller balloon)
+      vec3 n0 = normalize(vec3(-hx * sign(fs.x), -hy * sign(fs.y), 5.0 / (DEPTH_TX * INFLATE)));
+      // while a letter turns, its surface turns with it, so the highlight sweeps across
+      vec3 n = n0;
+      n = vec3(n.x * abs(fs.x) + n.z * tn.x, n.y, abs(-n.x * tn.x + n.z * abs(fs.x)));
+      n = normalize(vec3(n.x, n.y * abs(fs.y) + n.z * tn.y, abs(-n.y * tn.y + n.z * abs(fs.y))));
 
-    // cloud: sparse fine grain, organic through noise, kept dark close to the letters (soft halo)
-    float clear = 1.0 - 0.92 * smoothstep(0.35, 0.95, halo);
-    float lumC = ((0.025 + 0.15 * smoothstep(0.5, 1.0, D)) * (0.35 + 1.3 * nz) + 0.11 * lt) * clear * smoothstep(0.0, 0.7, uIntro);
+      // a key light from the upper left, and the pointer light hovering above the screen
+      vec3 P = vec3(c / uView.w, 0.0);
+      vec3 Lp = normalize(vec3(uLight / uView.w, 0.55) - P);
+      vec3 Lk = normalize(vec3(-0.45, 0.6, 0.66));
+      vec3 V = vec3(0.0, 0.0, 1.0);
+      float near = exp(-length(uLight - c) / uView.w * 2.2);
+      float wP = 0.35 + 0.65 * near;
+      float dif = max(dot(n, Lk), 0.0) * 0.55 + max(dot(n, Lp), 0.0) * 0.45;
+      float spec = pow(max(dot(n, normalize(Lk + V)), 0.0), 70.0) * 0.55
+                 + pow(max(dot(n, normalize(Lp + V)), 0.0), 50.0) * wP;
+      float fres = pow(1.0 - n.z, 2.0);
+      // soft env: the sky above is light, the floor below is dark
+      float env = fres * (0.55 + 0.45 * n.y);
+
+      float shade = 0.66 + 0.12 * (dif - 0.5) + 0.08 * env;
+      float edgeOn = abs(fs.x * fs.y);
+      lum = (0.97 + 0.03 * (dif - 0.6) + 0.03 * env + 0.3 * spec - 0.04 * nz) * smoothstep(0.0, 1.0, eo * 1.1);
+      lum *= 0.82 + 0.18 * edgeOn;
+      toneL = clamp(shade + 0.34 * spec, 0.0, 1.0);
+      // a few crisp glint cells where the highlight peaks
+      float glint = step(0.78, spec) * step(th, 0.7);
+      lum = max(lum, glint);
+      toneL = mix(toneL, 1.0, glint);
+    }
+    float onL = step(th, lum);
+
+    // cloud: sparse fine grain, organic through noise, evenly spread (no pool behind the wordmark),
+    // brightened only where someone points the light
+    float lumC = ((0.03 + 0.1 * nz * nz) + 0.12 * lt) * smoothstep(0.0, 0.7, uIntro);
     float onC = step(th, lumC);
-    float toneC = 0.3 + 0.18 * D + 0.5 * lt;
+    float toneC = 0.31 + 0.45 * lt;
 
-    on = mix(onC, onL, cov);
-    tone = mix(toneC, toneL, cov);
+    on = mix(onC, onL, pick);
+    tone = mix(toneC, toneL, pick);
   }
 
   gl_FragColor = vec4(mix(uInk, uPaper * clamp(tone, 0.0, 1.0), on), 1.0);
@@ -566,7 +708,8 @@ function createScene() {
   const u = (name) => gl.getUniformLocation(prog, name);
   const U = {
     view: u("uView"), time: u("uTime"), light: u("uLight"), vel: u("uVel"), hover: u("uHover"),
-    intro: u("uIntro"), logo: u("uLogo"), flip: u("uFlip[0]"),
+    intro: u("uIntro"), logo: u("uLogo"), flip: u("uFlip[0]"), tpc: u("uTexPerCell"),
+    turn: u("uTurn[0]"), float: u("uFloat[0]"),
   };
   gl.uniform3fv(u("uInk"), INK);
   gl.uniform3fv(u("uPaper"), PAPER);
@@ -574,17 +717,21 @@ function createScene() {
   gl.uniform1i(u("uBlue"), 1);
   gl.uniform2f(u("uTexScale"), wm.cw / wm.tw, wm.ch / wm.th);
   gl.uniform2f(u("uTexOff"), MARGIN / wm.tw, MARGIN / wm.th);
+  gl.uniform2f(u("uTexSize"), wm.tw, wm.th);
 
-  // One canvas texel = one dither cell = CELL device pixels (an integer, so upscaling stays crisp):
-  // 1.5 CSS px on a 2× screen, 2 on a 1× screen, ~1.7 on a 3× phone.
+  // One canvas texel = one dither cell = CELL device pixels (an integer, so upscaling stays crisp).
+  // A cell is ~1/80 of the wordmark's height, between 1 and 1.5 CSS px, and never under 2 device px:
+  // 1.5 CSS px on a 2× laptop, 1 CSS px on a 2× or 3× phone, 2 CSS px on a 1× screen.
   const dpr = window.devicePixelRatio || 1;
-  const CELL = Math.max(2, Math.round(dpr * 1.5));
-  const s = dpr / CELL; // cells per CSS px
+  let s = 1; // cells per CSS px
   let viewH = 1; // visible hero height, CSS px
   let canvasCssH = 1;
 
   const resize = () => {
     const hr = hero.getBoundingClientRect();
+    const cssCell = clamp(logoSvg.getBoundingClientRect().height / 80, 1, 1.5);
+    const CELL = Math.max(2, Math.round(dpr * cssCell));
+    s = dpr / CELL;
     const cw = Math.max(1, Math.ceil(hr.width * s));
     const ch = Math.max(1, Math.ceil(hr.height * s));
     canvas.width = cw;
@@ -611,6 +758,7 @@ function createScene() {
     const [l, t, w, h] = state.logoCss;
     const [lx, ly] = toCells(l - hr.left, t - hr.top + h);
     gl.uniform4f(U.logo, lx, ly, w * s, h * s);
+    gl.uniform1f(U.tpc, wm.ch / Math.max(1, h * s));
     const [px, py] = toCells(state.light[0], state.light[1]);
     gl.uniform2f(U.light, px, py);
     gl.uniform2f(U.vel, state.lightVel[0] / viewH, -state.lightVel[1] / viewH);
@@ -618,6 +766,8 @@ function createScene() {
     gl.uniform1f(U.hover, state.hover);
     gl.uniform1f(U.intro, state.intro);
     gl.uniform2fv(U.flip, flipUniform);
+    gl.uniform2fv(U.turn, turnUniform);
+    gl.uniform3fv(U.float, floatUniform);
     gl.drawArrays(gl.TRIANGLES, 0, 3);
   }
 
@@ -667,7 +817,10 @@ function idleTarget(t) {
   ];
 }
 {
-  const [x, y] = idleTarget(reduce ? 6 : 0);
+  // reduced motion: one still frame, the light parked above the wordmark's upper left
+  const [l, top, w] = state.logoCss;
+  const hr = hero.getBoundingClientRect();
+  const [x, y] = reduce ? [l - hr.left + w * 0.3, top - hr.top - w * 0.12] : idleTarget(0);
   state.light = [x, y];
   state.target = [x, y];
 }
@@ -703,6 +856,7 @@ function frame(now) {
   state.hover += ease * ((state.inside && !idle ? 1 : 0) - state.hover);
 
   updateFlips(now);
+  updateFloats(state.time, dt);
   scene?.draw();
 }
 
