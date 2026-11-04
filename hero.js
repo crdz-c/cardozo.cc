@@ -77,7 +77,8 @@ const BUILD_RATE = [
 // The theme switch (top right): its icon lights in once the build is over; a change sweeps out from it, softly.
 const ICON_R = 10; // CSS px: radius of the theme switch's icon
 const ICON_IN_MS = 700;
-const THEME_MS = 1400; // the theme change sweeps out from the switch in this long (ease in-out, every cell fading softly)
+const THEME_MS = 1300; // the theme change sweeps out from the switch in this long (ease in-out)
+const THEME_BLOCK_PX = 6; // …crossing in blocks of this many CSS px (big pixels), each at its own moment
 const THEME_COLOR = { dark: "#000000", light: "#ffffff" };
 const BUILD_S = 8; // s: the whole build on a first visit (or ?boot)
 const BUILD_QUICK = 2.8; // s: the whole build for a returning visitor in this session
@@ -679,8 +680,11 @@ precision highp float;
 #define LIGHT_SOFT 0.08    // an icon dot's light-up: softness of its arrival…
 #define LIGHT_OVER 1.25    // …overshoot of the progress, so every dot has arrived by the end…
 #define LIGHT_FLASH 0.3    // …and how long an arriving dot flashes (of the progress)
-#define THEME_SOFT 0.4     // the theme change: each cell fades over this much of the sweep (soft, not a dither)
-#define THEME_GRAIN 0.18   // …how much of the sweep's order is blue noise rather than distance from the switch
+#define THEME_SOFT 0.4     // the theme change: a wide sweep (this much of the way either side of its front)…
+#define LIGHT_INK 0.7      // light theme: letters and marks are ink, not dots: extra density, so every cell is lit…
+#define LIGHT_FIELD 1.7    // …the field's dots darken (greys of many tones, for contrast against the black)…
+#define LIGHT_FIELD_DENS 1.35 // …and come a little denser…
+#define FLICK_L_INK 0.22   // …and the letters flicker less (they read black)
 #define BG_D vec3(0.0)                       // dark: true black…
 #define FG_D vec3(0.9412, 0.9373, 0.9176)    // …and paper #f0efea
 #define BG_L vec3(1.0)                       // light: true white…
@@ -712,6 +716,7 @@ uniform float uTogHot;    // …hovered / focused 0..1
 uniform float uTheme;     // 0 dark … 1 light (eased in JS; each cell crosses at its own moment)
 uniform float uThemeDir;  // +1 going to light, -1 going to dark
 uniform vec3  uThemeO;    // where the change sweeps out from: x, y (device px), and the farthest corner's distance
+uniform float uThemeBlock; // …crossing in blocks of this many cells (big pixels)
 
 float hash3(vec3 p) { return fract(sin(dot(p, vec3(127.1, 311.7, 74.7))) * 43758.5453123); }
 float vnoise(vec3 x) {
@@ -821,6 +826,14 @@ void main() {
   float eNear = uE.z * exp(-pow(rE / (3.0 * uER), 2.0));
   float th = blue(cell);
   float th2 = blue(cell + vec2(29.0, 13.0));
+  // ---- theme: which palette this cell is in. A wide sweep out from the switch says how far along each place is
+  // (smooth in space and time); each block of uThemeBlock cells (a big pixel) crosses, whole, when the sweep reaches
+  // its own blue-noise rank, so the fade is a pixelated gradient. In the light theme letters are ink and the field is
+  // greys (see the knobs), so the density and tone rules below follow 'flip' too.
+  float tth = 0.002 + 0.996 * blue(floor(cell / uThemeBlock) + vec2(11.0, 37.0));
+  float td = clamp(length(pDev - uThemeO.xy) / max(uThemeO.z, 1.0), 0.0, 1.0);
+  td = uThemeDir > 0.0 ? td : 1.0 - td;
+  float flip = step(tth, smoothstep(td - THEME_SOFT, td + THEME_SOFT, uTheme * (1.0 + 2.0 * THEME_SOFT) - THEME_SOFT));
   float h = fract(sin(dot(cell, vec2(12.9898, 78.233))) * 43758.5453);
   // every dot has its own slow phase: it breathes in and out rather than popping
   float tw = 0.5 + 0.5 * sin(uTime * (0.45 + 1.1 * h) + h * 60.0);
@@ -951,20 +964,21 @@ void main() {
   float ripple = mix(1.0, 0.35 + 1.3 * rip, clamp(0.6 + 0.6 * uEnergy, 0.0, 1.0));
   float D = densityAt(cs);
   float lumC = (0.018 + 0.05 * D) * (0.45 + nz) * (1.0 + 0.6 * wave) * ripple * (1.0 - PULSE_THIN * uPulse) * film * rim
-    * (1.0 - WREV_THIN * wv.x) * (1.0 - WNULL * wv.y)
+    * (1.0 - WREV_THIN * wv.x) * (1.0 - WNULL * wv.y) * mix(1.0, LIGHT_FIELD_DENS, flip)
     + push.z * 0.3 * (0.6 + 0.4 * tw);
-  float lumL = (DENS_L + 0.5 * wave * DENS_WAVE + DENS_E * eNear + push.z * 0.3 + PULSE_L * uPulse)
+  float lumL = (DENS_L + 0.5 * wave * DENS_WAVE + DENS_E * eNear + push.z * 0.3 + PULSE_L * uPulse + LIGHT_INK * flip)
     * mix(TONE_DENS, 1.0, ftone) * (1.0 - MORPH_DIP * dip * (1.0 - ex)) * (1.0 - MELT_DIP * mid * (1.0 - ex))
     * mix(mix(rim, 1.0, k), 1.0, ex) * (1.0 - WNULL * wv.y);
-  // letters sit on the checkerboard lattice (so dense dots never fuse); the field is free blue noise
-  float site = mix(1.0, 1.0 - mod(cell.x + cell.y, 2.0), smoothstep(0.2, 0.6, letter));
+  // letters sit on the checkerboard lattice (so dense dots never fuse; in the light theme they are solid ink instead);
+  // the field is free blue noise
+  float site = mix(1.0, 1.0 - mod(cell.x + cell.y, 2.0), smoothstep(0.2, 0.6, letter) * (1.0 - flip));
   float lum = max(mix(lumC, lumL, letter), 0.0); // (the pointer's thinning can push it below zero)
   // a dot's intensity rises smoothly as the density passes its threshold: changes fade, nothing pops
   // (the fade width scales with the density, so sparse dots still come up to full intensity)
   float on = site * clamp((lum - th) / (DOT_FADE * lum + 0.004), 0.0, 1.0);
-  float toneC = (0.48 + 0.12 * D + 0.3 * eNear + 0.3 * push.z) * (1.0 - TWINKLE * tw) * (1.0 - FLICK_C * (1.0 - flick));
+  float toneC = (0.48 + 0.12 * D + 0.3 * eNear + 0.3 * push.z) * (1.0 - TWINKLE * tw) * (1.0 - FLICK_C * (1.0 - flick)) * mix(1.0, LIGHT_FIELD, flip);
   float toneL = TONE_L * mix(TONE_BRIGHT, 1.0, ftone) * (1.0 - 0.35 * TWINKLE * tw) * mix(0.72, 1.0, smoothstep(0.75, 1.0, uIntro))
-    * (1.0 - FLICK_L * (1.0 - sqrt(flick)));
+    * (1.0 - mix(FLICK_L, FLICK_L_INK, flip) * (1.0 - sqrt(flick)));
   float tone = mix(mix(toneC, toneL, letter), 1.0, flash);
   vec3 tint = mix(FIELD_TINT, vec3(1.0), max(letter, flash));
 
@@ -1001,11 +1015,8 @@ void main() {
 
   // a dot is either clearly lit or fully off: faint fades never lift the true black (OLED pixels stay off)
   on *= step(DOT_FLOOR, on);
-  // both palettes; each cell fades from one to the other, a wide soft wave sweeping out from the switch (a little grain)
+  // both palettes; a cell is in one or the other ('flip', above)
   float amtOn = on * clamp(tone, 0.0, 1.0);
-  float rk = THEME_GRAIN * th + (1.0 - THEME_GRAIN) * clamp(length(pDev - uThemeO.xy) / max(uThemeO.z, 1.0), 0.0, 1.0);
-  rk = uThemeDir > 0.0 ? rk : 1.0 - rk;
-  float flip = smoothstep(rk - THEME_SOFT, rk + THEME_SOFT, uTheme * (1.0 + 2.0 * THEME_SOFT) - THEME_SOFT);
   gl_FragColor = vec4(mix(mix(BG_D, FG_D * tint, amtOn), mix(BG_L, FG_L * tint, amtOn), flip), 1.0);
 }
 `;
@@ -1084,7 +1095,7 @@ function createScene() {
   const fbo = gl.createFramebuffer();
 
   const locs = (p, names) => Object.fromEntries(names.map((n) => [n, gl.getUniformLocation(p, n)]));
-  const UF = locs(field, ["uDev", "uE", "uEV", "uER", "uW[0]", "uTime", "uBlue", "uCells", "uCell", "uIntro", "uLogo", "uTexScale", "uTexOff", "uTexPerCell", "uLet[0]", "uBrand", "uRev", "uRep", "uN", "uLink", "uPulse", "uSea", "uEnergy", "uFocus", "uFocusAmt", "uMask", "uTog", "uTogHot", "uTheme", "uThemeDir", "uThemeO"]);
+  const UF = locs(field, ["uDev", "uE", "uEV", "uER", "uW[0]", "uTime", "uBlue", "uCells", "uCell", "uIntro", "uLogo", "uTexScale", "uTexOff", "uTexPerCell", "uLet[0]", "uBrand", "uRev", "uRep", "uN", "uLink", "uPulse", "uSea", "uEnergy", "uFocus", "uFocusAmt", "uMask", "uTog", "uTogHot", "uTheme", "uThemeDir", "uThemeO", "uThemeBlock"]);
   const UC = locs(compose, ["uField", "uCells", "uCell"]);
 
   gl.useProgram(field);
@@ -1204,6 +1215,7 @@ function createScene() {
     gl.uniform1f(UF.uTogHot, state.tog.hot);
     gl.uniform1f(UF.uTheme, theme.amt);
     gl.uniform1f(UF.uThemeDir, theme.dir);
+    gl.uniform1f(UF.uThemeBlock, Math.max(2, Math.round((THEME_BLOCK_PX * dpr) / CELL)));
     const [tox, toy] = toDev(theme.ox + hr.left, theme.oy + hr.top);
     gl.uniform3f(UF.uThemeO, tox, toy, Math.hypot(Math.max(tox, dev[0] - tox), Math.max(toy, dev[1] - toy)));
     gl.drawArrays(gl.TRIANGLES, 0, 3);

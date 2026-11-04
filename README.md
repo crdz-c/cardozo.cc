@@ -168,20 +168,29 @@ ease-out (quick first, a soft landing), and in the shader every dot has its own 
 that number reaches it, so most dots light almost at once and a few come late, each flashing as it lands. Used by the
 theme switch's icon (`ICON_IN_MS` 700), the pointer's gradient and ring when the pointer appears, the keyboard-focus
 underline, the curtain and the waves' reveal. A letter ⇄ mark change is eased out too (`MORPH_MS` 900–1300; it used to
-be in-out). The theme change is the one exception: it is a wide, soft wave, not a dither (see below).
+be in-out). The theme change crosses in big pixel blocks (see below).
 
 ## Theme
 
-Dark (true black ground, paper dots `#f0efea`) and light (true white `#fff` ground, true black `#000` dots: the exact
-inverse). The first paint already has the right one: an inline script in `index.html` sets `<html data-theme>` from
-`?theme=`, else the saved choice (`localStorage` `cc-theme`), else the system's `prefers-color-scheme` (which it keeps
-following until the visitor chooses). A switch at the top right (a 44 px `<button>`, `aria-label` "Switch to light
-mode" / "Switch to dark mode"; the shader draws it in dots as a half-filled ring, the filled half flipping with the
-theme; hover or focus lights it) toggles it. Both palettes live in the shader. The change is a **soft wave** sweeping
-out from the switch: each cell fades from one palette to the other over `THEME_SOFT` 0.4 of the sweep, the order being
-82 % distance from the switch and 18 % blue noise (`THEME_GRAIN`), the whole run `THEME_MS` 1400 on an ease in-out, so
-it reads as a gradient crossing the screen, not as flicker. CSS vars `--bg` / `--fg`, `theme-color` and `color-scheme`
-follow when it ends. Under reduced motion it switches at once.
+Dark (true black ground, paper dots `#f0efea`) and light (true white `#fff` ground, true black `#000`). The first
+paint already has the right one: an inline script in `index.html` sets `<html data-theme>` from `?theme=`, else the
+saved choice (`localStorage` `cc-theme`), else the system's `prefers-color-scheme` (which it keeps following until the
+visitor chooses). A switch at the top right (a 44 px `<button>`, `aria-label` "Switch to light mode" / "Switch to dark
+mode"; the shader draws it in dots as a half-filled ring, the filled half flipping with the theme; hover or focus
+lights it) toggles it. Both palettes live in the shader.
+
+**Light is not just the dark one inverted.** Black dots on white at the dark theme's density read as grey, so in light
+the letters and marks are *ink*: no checkerboard lattice and extra density (`LIGHT_INK` 0.7), so every cell inside them
+is lit, and they flicker less (`FLICK_L_INK` 0.22), which reads as solid black with a slight grain. The field is where
+the greys live: its dots are darker (`LIGHT_FIELD` 1.7×) and a bit denser (`LIGHT_FIELD_DENS` 1.35×), so ambient dots
+span many tones of grey against the black, and the marks keep their own tones (the envelope's flap, its sides).
+
+**The change is a pixelated wave.** A wide sweep out from the switch (`THEME_SOFT` 0.4, `THEME_MS` 1300 on an ease
+in-out) says how far along each place is; the field is cut into blocks of `THEME_BLOCK_PX` 6 CSS px (big pixels), and
+a block crosses between palettes, whole, when the sweep reaches its own blue-noise rank. So the fade is a dithered
+gradient made of visible pixels crossing at their own moments, wide enough to feel continuous, and the density and
+tone rules above follow each block, so letters turn from dots to ink (or back) as their block crosses. CSS vars
+`--bg` / `--fg`, `theme-color` and `color-scheme` follow when it ends. Under reduced motion it switches at once.
 
 ## Loading: the letters fill with dots
 
@@ -240,13 +249,13 @@ Shader (`FIELD` / `PUSH` in `hero.js`): `DENS_L` 0.72 · `DENS_WAVE` 0.25 · `DE
 0.95 · `MOAT` 1.5 · `PUSH_AMT` 0.6 · `DEFLECT` 0.35 · `RING` 0.75 · `THIN` 0.6 · `WAKE` 0.5 · `STRETCH` 0.1 ·
 `BREATHE` 0.03 · `WAVE_SPEED` 1.05 · `WAVE_WIDTH` 0.1 · `WAVE_PUSH` 0.008 · `WAVE_DENS` 0.4 · `HOLE` 0.5 · `FLICK_C` 0.8 · `FLICK_L` 0.4 ·
 `WREV_LEAD` 0.1 · `WREV_HOLD` 0.36 · `WREV_TAIL` 0.5 · `WREV_THIN` 0.65 · `WNULL_AT` 0.07 · `WNULL_W` 0.05 · `WNULL` 0.9 · `THEME_SOFT` 0.4 ·
-`THEME_GRAIN` 0.18 · `LIGHT_SOFT` 0.08 · `LIGHT_OVER` 1.25 · `LIGHT_FLASH` 0.3 · `BG_D` / `FG_D` / `BG_L` / `FG_L` (the two palettes).
+`LIGHT_INK` 0.7 · `LIGHT_FIELD` 1.7 · `LIGHT_FIELD_DENS` 1.35 · `FLICK_L_INK` 0.22 · `LIGHT_SOFT` 0.08 · `LIGHT_OVER` 1.25 · `LIGHT_FLASH` 0.3 · `BG_D` / `FG_D` / `BG_L` / `FG_L` (the two palettes).
 JS (top of `hero.js`): `POINTER_R` 32 px · `NUCLEUS_R` 5 px · `POINTER_SPRING` [30, 1] · `POINTER_LAG` 0.3 ·
 `AFTERGLOW` 2.8 s · `MAX_SPEED` 2400 px/s · `CURTAIN_R` 0.85 · `CURTAIN_SPRING` [16, 1] · `REPEL_OPEN` [7, 0.8] · `REPEL_CLOSE` [3.2, 1] · `CURTAIN_OPEN` 10/s ·
 `CURTAIN_CLOSE` 3/s · `IDLE_MS` 3000 · `MORPH_MS` 900–1300 · `CYCLE_MS` 9000 · `SOLO_AT` 700–3600 · `SOLO_BACK` 0.5 ·
 `SOLO_BACK_AFTER` 1700–2600 · `CONVERGE_AT` 6200 · `CONVERGE_STAGGER` 500 · `PULSE_AT` 6000 · `PULSE_MS` 3600 ·
 `WAVE_LIFE` 3.2 s · `WAVE_PULSES` 2 · `WAVE_PULSE_GAP` 0.2 s · `WAVE_PULSE_DECAY` 0.15 · `MAX_WAVES` 8 · `ICON_R` 10 px · `ICON_IN_MS` 700 ·
-`THEME_MS` 1400 · `BUILD_RATE` (above) · `BUILD_S` 8 s · `BUILD_QUICK` 2.8 s · `CURTAIN_FROM` 0.5 · `BRAND_H` 9.5
+`THEME_MS` 1300 · `THEME_BLOCK_PX` 6 · `BUILD_RATE` (above) · `BUILD_S` 8 s · `BUILD_QUICK` 2.8 s · `CURTAIN_FROM` 0.5 · `BRAND_H` 9.5
 units · `BRAND_ROUND` [4, 3] texels · `ROUND_OPEN` / `ROUND_CLOSE` 17 / 9 texels. Dark: ground `#000000`, dots `#f0efea`; light: ground `#ffffff`, dots `#000000`.
 
 Visual direction is inspired by christendijoux.com; the shader, motion and code here are original.
