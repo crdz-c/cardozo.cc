@@ -1,7 +1,7 @@
 // cardozo.cc hero — one canvas of dots. The CRDZC wordmark is drawn into a single dithered dot field. Each letter
 // is a link, and under each letter lies the brand mark of its link: the pointer opens the wordmark like a curtain
 // and reveals the marks beneath it; left alone, the letters turn into their marks on their own and every 9 s it all
-// converges back into CRDZC. Every change of shape is the same morph: the dots walk to their places in the next form.
+// converges back into CRDZC. A letter's own change melts one shape into the other.
 // The pointer itself is drawn as a dot with a soft gradient of dots (the system cursor is hidden); a click on the
 // background sends one long, quiet ring across the screen; loading is the wordmark accumulating dot by dot, at
 // random, in bursts. No dependencies. Everything degrades: no JS → the SVG letters as links; no WebGL → the same SVG,
@@ -35,11 +35,13 @@ const POINTER_LAG = 0.3; // …but never trails it by more than this, × POINTER
 const AFTERGLOW = 2.8; // s: decay time of the field's stirred-up energy
 const MAX_SPEED = 2400; // CSS px/s: cap on the speed the field's deflection and wake respond to
 const CURTAIN_R = 0.85; // × wordmark height: radius of the reveal around the pointer
-const CURTAIN_SPRING = [10, 1]; // the opening follows the pointer on this soft spring (inertia, drag)
+const CURTAIN_SPRING = [16, 1]; // the reveal follows the pointer on this spring (fluid, a little behind)
 const CURTAIN_OPEN = 10; // 1/s: how fast the reveal opens…
 const CURTAIN_CLOSE = 3; // …and closes again (a soft delay as the letters re-form)
+const REPEL_OPEN = [7, 0.8]; // the repel (oil on water) opens on this spring (ω, ζ: a touch of overshoot)…
+const REPEL_CLOSE = [3.2, 1]; // …and flows back on this slower one
 const IDLE_MS = 3000; // ms without pointer input before the stand-alone choreography resumes
-const MORPH_MS = [1300, 1700]; // ms per morph (letter ⇄ mark), scaled down for a partial one
+const MORPH_MS = [1000, 1400]; // ms per change (letter ⇄ mark), scaled down for a partial one
 // the stand-alone cycle (ms from the cycle's start): hold → individual morphs → convergence → hold
 const CYCLE_MS = 9000;
 const SOLO_AT = [700, 3600]; // each letter turns into its mark at a random moment in here…
@@ -81,7 +83,7 @@ const state = {
   linkAmt: 0,
   lastInput: -Infinity, // performance.now() of the last pointer input
   // the curtain: its centre (hero CSS px, on a spring) and how open it is (0..1)
-  cur: { x: -1e4, y: -1e4, vx: 0, vy: 0, amt: 0 },
+  cur: { x: -1e4, y: -1e4, vx: 0, vy: 0, amt: 0, rep: 0, rv: 0 },
   pulse: 0, // convergence pulse 0..1
   energy: 0, // stirred-up energy of the field (0..1), decays over AFTERGLOW
   stir: [0, 0], // where it was last stirred, hero CSS px
@@ -93,7 +95,7 @@ const state = {
 // ------------------------------------------------------------------ letters: links with a mark beneath
 // Each letter is a link (an SVG <a> in index.html). Beneath it lies the brand mark of its link. A letter's state
 // is one number, `amt`: 0 shows the letter, 1 the mark; it moves between them by a morph (eased over MORPH_MS) and
-// in between, its dots walk from one shape to the other (see buildWalkers and PARTICLE_V). The letters keep a random
+// in between, the shader melts one shape into the other (see FIELD). The letters keep a random
 // orientation (mirrored or not, on each axis) as a static identity for the visit; marks are always upright.
 const LETTERS = 5;
 const LETTER_EDGES = [-1, 18.55 / 90, 36.15 / 90, 54.75 / 90, 71.15 / 90, 2]; // gap midpoints, in u
@@ -405,78 +407,6 @@ const buildBrandTexture = () =>
       )
   );
 
-// ------------------------------------------------------------------ walking dots
-// For each letter, the dots of its letter shape (as mirrored) and of its mark are sampled once on the dot lattice
-// (at a nominal 80 rows per wordmark height, the same density rule as the shader), ordered along a Hilbert curve and
-// paired by rank: a cheap approximate optimal transport, so paths stay short and rarely cross. The smaller set is
-// reused so every dot of both shapes takes part (some dots split or merge on the way). Each pair gets a rank: when
-// it sets off within the morph (half random, half a smooth function of place, so the motion ripples).
-const WALK_ROWS = 80;
-function hilbert(n, x, y) {
-  let d = 0;
-  for (let s = n / 2; s >= 1; s /= 2) {
-    const rx = (x & s) > 0 ? 1 : 0;
-    const ry = (y & s) > 0 ? 1 : 0;
-    d += s * s * ((3 * rx) ^ ry);
-    if (ry === 0) {
-      if (rx === 1) {
-        x = s - 1 - x;
-        y = s - 1 - y;
-      }
-      [x, y] = [y, x];
-    }
-  }
-  return d;
-}
-function buildWalkers(wm, br) {
-  const aspect = VBW / VBH;
-  const cols = Math.round(WALK_ROWS * aspect);
-  const sample = (tex, qx, qy) => {
-    const tx = Math.round(MARGIN + qx * tex.cw);
-    const ty = Math.round(MARGIN + (1 - qy) * tex.ch);
-    if (tx < 0 || ty < 0 || tx >= tex.tw || ty >= tex.th) return null;
-    const o = (ty * tex.tw + tx) * 4;
-    return tex.data[o] > 127 ? tex.data[o + 3] / 255 : null;
-  };
-  const out = [];
-  for (let li = 0; li < LETTERS; li++) {
-    const x0 = Math.max(0, LETTER_EDGES[li]);
-    const x1 = Math.min(1, LETTER_EDGES[li + 1]);
-    const cu = LETTER_CENTERS[li];
-    const { mx, my } = letters[li];
-    const A = [];
-    const B = [];
-    for (let j = 0; j < WALK_ROWS; j++) {
-      const qy = (j + 0.5) / WALK_ROWS;
-      for (let i = Math.floor(x0 * cols); i < Math.ceil(x1 * cols); i++) {
-        if ((i + j) % 2) continue;
-        const qx = (i + 0.5) / cols;
-        if (qx < x0 || qx >= x1) continue;
-        const ta = sample(wm, cu + (qx - cu) * mx, 0.5 + (qy - 0.5) * my);
-        if (ta !== null && Math.random() < 0.72 * (0.3 + 0.7 * ta)) A.push([qx, qy, 0.97 * (0.5 + 0.5 * ta)]);
-        const tb = sample(br, qx, qy);
-        if (tb !== null && Math.random() < 0.72 * (0.3 + 0.7 * tb)) B.push([qx, qy, 0.97 * (0.5 + 0.5 * tb)]);
-      }
-    }
-    if (!A.length || !B.length) continue;
-    const key = (p) => hilbert(1024, Math.min(1023, Math.floor((p[0] - x0) * aspect * 1023)), Math.min(1023, Math.floor(p[1] * 1023)));
-    A.forEach((p) => p.push(key(p)));
-    B.forEach((p) => p.push(key(p)));
-    A.sort((u, v) => u[3] - v[3]);
-    B.sort((u, v) => u[3] - v[3]);
-    const N = Math.max(A.length, B.length);
-    for (let k = 0; k < N; k++) {
-      const a = A[Math.floor((k * A.length) / N)];
-      const b = B[Math.floor((k * B.length) / N)];
-      const mxp = ((a[0] + b[0]) / 2) * aspect;
-      const myp = (a[1] + b[1]) / 2;
-      const smooth = 0.5 + 0.5 * Math.sin(mxp * 9.1 + 1.3) * Math.sin(myp * 7.7 + 0.4);
-      out.push(a[0], a[1], b[0], b[1], 0.5 * Math.random() + 0.5 * smooth, li, a[2], b[2]);
-    }
-  }
-  return new Float32Array(out);
-}
-
 // ------------------------------------------------------------------ shaders
 // Two passes. FIELD runs at one fragment per dither cell into a texture; COMPOSE runs at device pixels and
 // upscales the cells (each cell an exact CELL × CELL square).
@@ -554,55 +484,6 @@ vec3 pushAt(vec2 p) {
 }
 `;
 
-const CURTAIN = `
-float hash3(vec3 p) { return fract(sin(dot(p, vec3(127.1, 311.7, 74.7))) * 43758.5453123); }
-float vnoise(vec3 x) {
-  vec3 i = floor(x);
-  vec3 f = fract(x);
-  f = f * f * (3.0 - 2.0 * f);
-  float a = mix(hash3(i),                       hash3(i + vec3(1.0, 0.0, 0.0)), f.x);
-  float b = mix(hash3(i + vec3(0.0, 1.0, 0.0)), hash3(i + vec3(1.0, 1.0, 0.0)), f.x);
-  float c = mix(hash3(i + vec3(0.0, 0.0, 1.0)), hash3(i + vec3(1.0, 0.0, 1.0)), f.x);
-  float d = mix(hash3(i + vec3(0.0, 1.0, 1.0)), hash3(i + vec3(1.0, 1.0, 1.0)), f.x);
-  return mix(mix(a, b, f.y), mix(c, d, f.y), f.z);
-}
-
-uniform vec4  uRev;       // the curtain: centre x, y (device px), radius (device px), openness 0..1
-uniform vec2  uRevV;      // its velocity, device px / s
-#define CURTAIN_BAND 0.5   // the curtain's dissolving edge: half-width of the band, × its radius
-#define CURTAIN_WARP 0.35  // domain warp of its boundary (two octaves of flowing noise), × its radius
-#define CURTAIN_STRETCH 0.6 // at speed it stretches this much along the motion…
-#define CURTAIN_WIDEN 0.25 // …and widens this much across it
-#define CURTAIN_GATHER 0.08 // along the edge, letter dots are pushed aside this far, × its radius…
-#define CURTAIN_FOLD 0.05  // …and shifted along the edge in folds this far…
-#define CURTAIN_BUNCH 0.35 // …bunching up this much denser
-
-// The curtain around the pointer: an irregular, living opening whose boundary is domain-warped by two octaves of
-// slowly flowing noise (never a circle), stretched along the motion and wider when the pointer moves fast, relaxing
-// when it is still (it trails the pointer on a soft spring, in JS). Returns its openness at pDev (0..1, a wide
-// dissolving band at the edge); rw is the warped position (for the folds), w1x a slow noise.
-float curtainAt(vec2 pDev, out vec2 rw, out float w1x) {
-  float Rc = max(uRev.z, 1.0);
-  vec2 rv = (pDev - uRev.xy) / Rc;
-  float spdC = length(uRevV);
-  float fastC = clamp(spdC / (Rc * 4.0), 0.0, 1.0);
-  vec2 vd = spdC > 1.0 ? uRevV / spdC : vec2(1.0, 0.0);
-  vec2 rs = vec2(dot(rv, vd) / (1.0 + CURTAIN_STRETCH * fastC), dot(rv, vec2(-vd.y, vd.x)) / (1.0 + CURTAIN_WIDEN * fastC));
-  vec2 w1 = vec2(vnoise(vec3(rs * 1.1, uTime * 0.21)), vnoise(vec3(rs * 1.1 + 4.3, uTime * 0.19 + 2.0))) - 0.5;
-  vec2 w2 = vec2(vnoise(vec3((rs + w1) * 2.6, uTime * 0.37 + 5.0)), vnoise(vec3((rs + w1) * 2.6 + 9.1, uTime * 0.33 + 7.0))) - 0.5;
-  rw = rs + CURTAIN_WARP * (w1 * 1.6 + w2 * 0.6) * 2.0;
-  w1x = w1.x;
-  return uRev.w * (1.0 - smoothstep(1.0 - CURTAIN_BAND, 1.0 + CURTAIN_BAND, length(rw)));
-}
-
-#define WALK_SPREAD 0.55   // the morph: dots set off at their own moments over this share of it (rank + smooth noise)…
-#define WALK_CURVE 0.18    // …walk a slightly curved path (bend, × its length)…
-#define WALK_WOBBLE 0.012  // …with a little wander (× letter height)…
-#define WALK_DIP 0.45      // …dimming this much mid-way and brightening again on arrival
-#define WALK_TONE 0.85     // walking dots' tone, × the shape's (matches the still dots' average)
-#define WALK_EDGE 0.1     // at both ends of a morph the walking dots hand over to the still ones over this much of it
-`;
-
 const FIELD = `
 precision highp float;
 #define DEPTH_TX ${DEPTH.toFixed(1)}
@@ -617,13 +498,25 @@ precision highp float;
 #define EDGE_NOISE 2.2     // roughness of that ramp, in cells
 #define TONE_DENS 0.3      // dot density of a mark's darkest tone layer (the envelope's sides), × full
 #define TONE_BRIGHT 0.5    // …and its brightness
+#define CURTAIN_FEATHER 0.35 // the curtain: a soft disc around the pointer, its edge feathered over this, × its radius…
+#define CURTAIN_WOBBLE 0.18  // …and gently, slowly wobbled by noise this much, × its radius
+#define MORPH_RIPPLE 0.5   // under the curtain each site switches at its own moment: this much smooth spatial noise…
+#define MORPH_NOISE 2.2    // …at this scale (per letter height), the rest its own blue-noise rank…
+#define MORPH_SOFT 0.08    // …taking this share of the reveal to switch…
+#define MORPH_DRIFT 0.05   // …drifting up to this far toward the new shape (× letter height)…
+#define MORPH_DIP 0.6      // …and dimming this much while it does
+#define REPEL 0.5          // oil on water: the film of dots is pushed out this far at the centre (× curtain radius)…
+#define REPEL_W 0.9        // …the push decays smoothly over this radius (× curtain radius), so it never folds…
+#define REPEL_SOFT 0.12    // …the opening's edge softens over this (× curtain radius)…
+#define REPEL_RIM 1.6      // …and the displaced dots gather at the rim, up to this much denser
+#define MELT_RIPPLE 0.25   // a letter's own change (the melt): the moment shifts this much across the letter…
+#define MELT_NOISE 1.4     // …along a smooth noise at this scale (per letter height)…
+#define MELT_WARP 0.06     // …space bends this much mid-way (× letter height, a slow flow field)…
+#define MELT_DIP 0.35      // …and intensities dip this much mid-way
 #define PULSE_L 0.3        // convergence pulse: letters this much denser…
 #define PULSE_THIN 0.45    // …the field this much thinner…
 #define PULSE_GATHER 0.05  // …and gathered this much toward the wordmark (× distance)
-#define BUILD_CORE 0.65    // loading: how much earlier a letter's core arrives than its edges…
-#define BUILD_CLUMP 0.4    // …and how unevenly (smooth noise), early in the build
-#define BUILD_SCATTER 0.3  // scattered dots landing around the letters early on (they fade as the letters win)
-#define BUILD_GAIN 1.15    // arrival rate (≥ 1 so every site has arrived when the build ends)
+#define BUILD_GAIN 1.03    // arrival rate (≥ 1 so every site has arrived when the build ends)
 #define FLASH 0.06         // a dot flashes bright on arrival, fading over this much of the build
 #define DOT_FADE 0.12      // a dot fades over this much density past its threshold (no popping)
 #define DOT_FLOOR 0.3      // below this intensity a dot is fully off
@@ -641,7 +534,6 @@ precision highp float;
 #define MOAT 1.5           // a thin dark moat around the nucleus, out to this × its radius
 
 ${PUSH}
-${CURTAIN}
 
 uniform vec2  uCells;     // field size, in cells
 uniform float uCell;      // device px per cell
@@ -652,7 +544,8 @@ uniform vec2  uTexOff;
 uniform float uTexPerCell;
 uniform vec4  uLet[5];    // per letter: amt (0 letter … 1 mark), mirror x, mirror y
 uniform sampler2D uBrand;
-uniform sampler2D uParticles; // the walking dots (see PARTICLE_V), one texel per cell
+uniform vec4  uRev;       // the curtain: centre x, y (device px), radius (device px), openness 0..1
+uniform float uRep;       // the repel around it (oil on water), 0..1, viscous (JS)
 uniform vec4  uN;         // the nucleus: x, y (device px), presence, radius (device px)
 uniform float uLink;      // the pointer is over a letter-link (0..1)
 uniform float uPulse;     // convergence pulse 0..1
@@ -663,6 +556,18 @@ uniform float uFocusAmt;
 uniform vec3  uInk;
 uniform vec3  uPaper;
 uniform sampler2D uMask;
+
+float hash3(vec3 p) { return fract(sin(dot(p, vec3(127.1, 311.7, 74.7))) * 43758.5453123); }
+float vnoise(vec3 x) {
+  vec3 i = floor(x);
+  vec3 f = fract(x);
+  f = f * f * (3.0 - 2.0 * f);
+  float a = mix(hash3(i),                       hash3(i + vec3(1.0, 0.0, 0.0)), f.x);
+  float b = mix(hash3(i + vec3(0.0, 1.0, 0.0)), hash3(i + vec3(1.0, 1.0, 0.0)), f.x);
+  float c = mix(hash3(i + vec3(0.0, 0.0, 1.0)), hash3(i + vec3(1.0, 0.0, 1.0)), f.x);
+  float d = mix(hash3(i + vec3(0.0, 1.0, 1.0)), hash3(i + vec3(1.0, 1.0, 1.0)), f.x);
+  return mix(mix(a, b, f.y), mix(c, d, f.y), f.z);
+}
 
 // the field: 1 at the wordmark, falling off toward the edges, warped by slow noise
 float fieldAt(vec2 p) {
@@ -679,8 +584,7 @@ float fieldAt(vec2 p) {
 float densityAt(vec2 p) {
   float yv = p.y / uCells.y;
   float calm = smoothstep(0.0, 0.15, min(yv, 1.0 - yv));
-  float fill = mix(0.45, 1.0, smoothstep(0.0, 0.5, uIntro)); // the quiet field is there from the start
-  return (0.06 + 0.94 * fieldAt(p)) * (0.35 + 0.65 * calm) * fill;
+  return (0.06 + 0.94 * fieldAt(p)) * (0.35 + 0.65 * calm);
 }
 float letterIndex(float u) {
   return step(18.55 / 90.0, u) + step(36.15 / 90.0, u) + step(54.75 / 90.0, u) + step(71.15 / 90.0, u);
@@ -749,20 +653,39 @@ void main() {
   // every dot has its own slow phase: it breathes in and out rather than popping
   float tw = 0.5 + 0.5 * sin(uTime * (0.45 + 1.1 * h) + h * 60.0);
 
-  // ---- the curtain (see curtainAt). Along its dissolving edge the letter dots are gathered aside and shifted in
-  // slow folds, bunching up a little, like cloth drawn back.
-  vec2 rw;
-  float w1x;
-  float curtain = curtainAt(pDev, rw, w1x);
-  float fold = 4.0 * curtain * (1.0 - curtain);
-  float folds = sin(atan(rw.y, rw.x) * 6.0 + uTime * 0.9 + 3.0 * w1x);
-  vec2 dv = pDev - uRev.xy;
-  vec2 radial = dv / max(length(dv), 1.0);
-  cL -= (radial * CURTAIN_GATHER + vec2(-radial.y, radial.x) * CURTAIN_FOLD * folds) * fold * max(uRev.z, 1.0) / uCell;
+  // ---- the curtain: a soft disc around the pointer (on a spring, in JS), its edge feathered and gently wobbling
+  vec2 rv = pDev - uRev.xy;
+  float wob = vnoise(vec3(rv / max(uRev.z, 1.0) * 1.6, uTime * 0.35)) - 0.5;
+  float edge = uRev.z * (1.0 + 2.0 * CURTAIN_WOBBLE * wob);
+  float curtain = uRev.w * (1.0 - smoothstep(edge * (1.0 - CURTAIN_FEATHER), edge * (1.0 + CURTAIN_FEATHER), length(rv)));
 
-  vec2 q = (cL - uLogo.xy) / uLogo.zw;
+  // ---- oil on water: around the curtain's centre the surface film of dots (the letters and the field) is pushed
+  // radially outward along smooth flow lines, leaving a clean opening where the mark beneath reads clearly. Material
+  // at radius x moves to x + D(x), D = REPEL·R·e^(−(x/W)²); we invert that per cell (a few fixed-point steps), so
+  // the opening is empty and the film is compressed just outside it: a soft, denser rim, like the bead at the edge
+  // of oil. It opens slowly and closes more slowly (viscous, in JS) and rides the curtain's lagging centre.
+  float film = 1.0;
+  float rim = 1.0;
+  vec2 cLr = cL;
+  if (uRep > 0.001) {
+    float rr = length(rv) + 0.001;
+    float H = REPEL * uRev.z * uRep;
+    float W = REPEL_W * uRev.z;
+    float x = rr;
+    for (int i = 0; i < 4; i++) x = rr - H * exp(-pow(max(x, 0.0) / W, 2.0));
+    float xs = max(x, 0.0);
+    float dD = -2.0 * xs / (W * W) * H * exp(-pow(xs / W, 2.0));
+    film = smoothstep(0.0, REPEL_SOFT * uRev.z, x);
+    rim = min(1.0 / max(1.0 + dD, 0.05), REPEL_RIM);
+    vec2 off = rv / rr * (xs - rr) / uCell;
+    cLr += off;
+    cs += off;
+  }
+
+  vec2 qU = (cL - uLogo.xy) / uLogo.zw;   // where the marks are (they lie beneath and do not move)
+  vec2 q = (cLr - uLogo.xy) / uLogo.zw;   // where the letters' film comes from
   float aspect = uLogo.z / uLogo.w;
-  float li = letterIndex(q.x);
+  float li = letterIndex(qU.x);
   vec4 lt = letFor(li);
 
   vec2 pc = (cs - lc) / uCells.y;
@@ -771,51 +694,62 @@ void main() {
   float soft = EDGE_SOFT * mix(1.0, EDGE_HOVER, eNear);
   float rough = (vnoise(vec3(c * 0.3, uTime * 0.25)) - 0.5) * EDGE_NOISE * mix(1.0, 0.4, eNear);
 
-  // ---- the morph. How far this spot has gone from letter to mark: the letter's own amount, or the curtain,
-  // whichever is further. At rest (0 or 1) the still dots show the letter or the mark; in between, the still dots
-  // give way to the walking dots (PARTICLE_V), which carry the change dot by dot.
-  float P = max(lt.x, curtain);
-  vec2 qa = q * vec2(aspect, 1.0);
-  float walking = smoothstep(0.0, WALK_EDGE, P) * (1.0 - smoothstep(1.0 - WALK_EDGE, 1.0, P));
-  vec2 sdA = letterSD(li, q, aspect, lt.yz, 0.0);
-  float letter = smoothstep(-soft, soft, sdA.x + rough);
-  float ftone = sdA.y;
-  if (P >= 0.5) {
-    vec2 sdB = letterSD(li, q, aspect, vec2(1.0), 1.0);
-    letter = smoothstep(-soft, soft, sdB.x + rough);
-    ftone = sdB.y;
-  }
-  letter *= 1.0 - walking;
+  // ---- a letter's own change (letter ⇄ mark, amount s): the melt. The two shapes' signed distances are blended, so
+  // one shape flows into the other as a single mass; the moment shifts a little across the letter along a smooth
+  // noise (the change ripples through it), space bends gently mid-way along a slow flow field, and intensities dip
+  // and rise. Continuous in time and space: nothing pops, nothing fragments, nothing is scaled.
+  float s = lt.x;
+  vec2 qa = qU * vec2(aspect, 1.0);
+  float mid = sin(3.14159 * s);
+  float sl = clamp(s + (vnoise(vec3(qa * MELT_NOISE, li * 7.0)) - 0.5) * 2.0 * MELT_RIPPLE * mid, 0.0, 1.0);
+  sl = sl * sl * (3.0 - 2.0 * sl);
+  vec2 warp = (vec2(vnoise(vec3(qa * 1.7, uTime * 0.4)), vnoise(vec3(qa * 1.7 + 5.0, uTime * 0.4 + 3.0))) - 0.5) * 2.0 * MELT_WARP * mid;
+  warp.x /= aspect;
 
-  // ---- loading: particles landing, like the double-slit experiment's detector screen. Every lattice site has its
-  // own arrival moment (its blue-noise rank) and arrives at a rate set by its probability: a letter's core is likelier
-  // than its edges, unevenly (smooth noise), so the dots land at random and the shapes emerge only by accumulation.
-  // Early on a few scattered dots land around the letters too; they fade as the letters win. Each dot flashes as it
-  // lands and settles; arrived letter dots stay, and the build ends exactly in the resting wordmark.
+  // ---- the curtain's reveal: under it, each lattice site switches from the (melted) letter to the mark at its own
+  // moment (blue-noise rank mixed with a smooth spatial noise), drifting a little toward the new shape and dimming
+  // while it switches; behind the pointer the sites switch back
+  float k = 0.0;
+  vec2 flow = vec2(0.0);
+  if (curtain > 0.0) {
+    float rank = mix(th2, vnoise(vec3(qa * MORPH_NOISE, li * 7.0)), MORPH_RIPPLE);
+    k = smoothstep(rank - MORPH_SOFT, rank + MORPH_SOFT, curtain * (1.0 + 2.0 * MORPH_SOFT) - MORPH_SOFT);
+    flow = (vec2(vnoise(vec3(qa * 3.0, 1.3)), vnoise(vec3(qa * 3.0 + 5.0, 2.1))) - 0.5) * 2.0 * MORPH_DRIFT;
+    flow.x /= aspect;
+  }
+  float dip = 4.0 * k * (1.0 - k);
+
+  vec2 qM = q + warp + flow * k;
+  vec2 sdM = letterSD(li, qM, aspect, lt.yz, 0.0);
+  if (s > 0.0) sdM = mix(sdM, letterSD(li, qM, aspect, vec2(1.0), 1.0), sl);
+  float letter = smoothstep(-soft, soft, sdM.x + rough) * film;
+  float ftone = sdM.y;
+  if (k > 0.0) {
+    vec2 sdB = letterSD(li, qU + warp - flow * (1.0 - k), aspect, vec2(1.0), 1.0);
+    letter = mix(letter, smoothstep(-soft, soft, sdB.x + rough), k);
+    ftone = mix(ftone, sdB.y, k);
+  }
+
+  // ---- loading: the letters fill with dots, and only the letters. Every lattice site inside them has its own
+  // arrival moment (its blue-noise rank) and lands when the fill passes it, so dots land at random all over the
+  // letters at the rate of the build curve (BUILD_RATE); each flashes as it lands and settles. The field around is
+  // simply there, untouched by the build.
   float flash = 0.0;
   if (uIntro < 1.0) {
-    float t = uIntro;
-    float w = smoothstep(0.3, 0.9, t);
-    float core = smoothstep(0.0, 6.0, sdA.x);
-    float clump = vnoise(vec3(qa * 4.0, 3.7));
-    float prob = mix((1.0 - BUILD_CORE) + BUILD_CORE * core, 1.0, w) * mix(1.0 - BUILD_CLUMP + 2.0 * BUILD_CLUMP * clump, 1.0, w);
-    float aL = t * BUILD_GAIN * prob;
-    float aF = t * BUILD_GAIN * BUILD_SCATTER * fieldAt(c);
-    float arrL = smoothstep(th2 - 0.01, th2 + 0.01, aL);
-    float arrF = smoothstep(th2 - 0.01, th2 + 0.01, aF) * (1.0 - w) * (1.0 - letter);
-    flash = max(arrL * letter * exp(-max(aL - th2, 0.0) / FLASH), arrF * exp(-max(aF - th2, 0.0) / FLASH));
-    letter = max(letter * arrL, arrF);
+    float a = uIntro * BUILD_GAIN;
+    float arr = smoothstep(th2 - 0.01, th2 + 0.01, a);
+    flash = arr * letter * exp(-max(a - th2, 0.0) / FLASH);
+    letter *= arr;
   }
 
   // ---- density and tone. One material: letters are where the same dots gather and burn brighter.
   float rip = vnoise(vec3(cs * SEA_RIPPLE, uTime * 0.12));
   float ripple = mix(1.0, 0.35 + 1.3 * rip, clamp(0.6 + 0.6 * uEnergy, 0.0, 1.0));
   float D = densityAt(cs);
-  float lumC = (0.018 + 0.05 * D) * (0.45 + nz) * (1.0 + 0.6 * wave) * ripple * (1.0 - PULSE_THIN * uPulse)
+  float lumC = (0.018 + 0.05 * D) * (0.45 + nz) * (1.0 + 0.6 * wave) * ripple * (1.0 - PULSE_THIN * uPulse) * film * rim
     + push.z * 0.3 * (0.6 + 0.4 * tw);
   float lumL = (DENS_L + 0.5 * wave * DENS_WAVE + DENS_E * eNear + push.z * 0.3 + PULSE_L * uPulse)
-    * (1.0 + CURTAIN_BUNCH * fold * (0.6 + 0.4 * folds))
-    * mix(TONE_DENS, 1.0, ftone);
+    * mix(TONE_DENS, 1.0, ftone) * (1.0 - MORPH_DIP * dip) * (1.0 - MELT_DIP * mid) * mix(rim, 1.0, k);
   // letters sit on the checkerboard lattice (so dense dots never fuse); the field is free blue noise
   float site = mix(1.0, 1.0 - mod(cell.x + cell.y, 2.0), smoothstep(0.2, 0.6, letter));
   float lum = max(mix(lumC, lumL, letter), 0.0); // (the pointer's thinning can push it below zero)
@@ -826,14 +760,6 @@ void main() {
   float toneL = TONE_L * mix(TONE_BRIGHT, 1.0, ftone) * (1.0 - 0.35 * TWINKLE * tw) * mix(0.72, 1.0, smoothstep(0.75, 1.0, uIntro));
   float tone = mix(mix(toneC, toneL, letter), 1.0, flash);
   vec3 tint = mix(FIELD_TINT, vec3(1.0), max(letter, flash));
-
-  // the walking dots (one texel per cell, drawn just before this pass)
-  vec4 walker = texture2D(uParticles, (cell + 0.5) / uCells);
-  if (walker.g > 0.5) {
-    on = 1.0;
-    tone = walker.r;
-    tint = vec3(1.0);
-  }
 
   // keyboard focus: a dotted underline under the focused letter
   float under = step(uFocus.x, pDev.x) * step(pDev.x, uFocus.z) * step(abs(pDev.y - (uFocus.y - 3.0 * uCell)), uCell * 0.75);
@@ -870,60 +796,6 @@ void main() {
 }
 `;
 
-// The walking dots: every dot of a letter and every dot of its mark were paired once at load (see buildWalkers),
-// and while a letter changes, each pair's dot walks from its place in one shape to its place in the other, setting
-// off at its own moment, on a slightly curved path, dimming mid-way. Drawn as single-cell points into their own
-// texture, which the field pass reads. Their progress follows the same amount as the still dots: the letter's own,
-// or the curtain at the middle of the dot's path, so under the curtain the dots walk out as it opens and back as it
-// closes, unevenly.
-const PARTICLE_V = `
-precision highp float;
-attribute vec4 aPath;      // from (x, y), to (x, y), in wordmark units (0..1, y up)
-attribute vec4 aInfo;      // rank, letter, tone from, tone to
-uniform vec4  uLogo;
-uniform vec2  uCells;
-uniform float uCell;
-uniform vec4  uLet[5];
-uniform float uTime;
-${CURTAIN}
-varying float vTone;
-void main() {
-  vec4 lt = uLet[0];
-  for (int i = 1; i < 5; i++) {
-    if (abs(float(i) - aInfo.y) < 0.5) lt = uLet[i];
-  }
-  vec2 a = aPath.xy;
-  vec2 b = aPath.zw;
-  vec2 rw;
-  float w1x;
-  float P = max(lt.x, curtainAt((uLogo.xy + mix(a, b, 0.5) * uLogo.zw) * uCell, rw, w1x));
-  float walking = smoothstep(0.0, WALK_EDGE, P) * (1.0 - smoothstep(1.0 - WALK_EDGE, 1.0, P));
-  float r = aInfo.x;
-  float s = clamp((P - r * WALK_SPREAD) / (1.0 - WALK_SPREAD), 0.0, 1.0);
-  float e = s * s * (3.0 - 2.0 * s);
-  float arc = sin(3.14159 * e);
-  vec2 asp = vec2(uLogo.z / uLogo.w, 1.0);
-  vec2 d = (b - a) * asp;
-  vec2 bend = vec2(-d.y, d.x) * WALK_CURVE * (fract(r * 91.7) * 2.0 - 1.0) * arc;
-  vec2 wander = vec2(sin(uTime * 1.3 + r * 40.0), cos(uTime * 1.1 + r * 27.0)) * WALK_WOBBLE * arc;
-  vec2 pos = mix(a, b, e) + (bend + wander) / asp;
-  vec2 cellPos = floor(uLogo.xy + pos * uLogo.zw);
-  // near both ends a dot sits on the letters' checkerboard lattice (so it lands where still dots live); in flight it
-  // may be anywhere
-  if (arc < 0.35 && mod(cellPos.x + cellPos.y, 2.0) > 0.5) cellPos.x += 1.0;
-  cellPos += 0.5;
-  bool show = walking > fract(r * 57.31);
-  gl_Position = show ? vec4(cellPos / uCells * 2.0 - 1.0, 0.0, 1.0) : vec4(2.0, 2.0, 0.0, 1.0);
-  gl_PointSize = 1.0;
-  vTone = WALK_TONE * mix(aInfo.z, aInfo.w, e) * (1.0 - WALK_DIP * arc);
-}
-`;
-const PARTICLE_F = `
-precision mediump float;
-varying float vTone;
-void main() { gl_FragColor = vec4(vTone, 1.0, 0.0, 1.0); }
-`;
-
 const COMPOSE = `
 precision highp float;
 uniform sampler2D uField;
@@ -946,33 +818,26 @@ function createScene() {
     gl.compileShader(s);
     return gl.getShaderParameter(s, gl.COMPILE_STATUS) ? s : (console.warn(gl.getShaderInfoLog(s)), null);
   };
-  // program(fragment) uses the full-screen triangle; program(vertex, fragment) the walking dots
-  const program = (a, b) => {
-    const vs = compile(gl.VERTEX_SHADER, b ? a : VERT);
-    const fs = compile(gl.FRAGMENT_SHADER, b || a);
+  const program = (fragSrc) => {
+    const vs = compile(gl.VERTEX_SHADER, VERT);
+    const fs = compile(gl.FRAGMENT_SHADER, fragSrc);
     if (!vs || !fs) return null;
     const p = gl.createProgram();
     gl.attachShader(p, vs);
     gl.attachShader(p, fs);
-    gl.bindAttribLocation(p, 0, b ? "aPath" : "position");
-    if (b) gl.bindAttribLocation(p, 1, "aInfo");
+    gl.bindAttribLocation(p, 0, "position");
     gl.linkProgram(p);
     return gl.getProgramParameter(p, gl.LINK_STATUS) ? p : null;
   };
   const field = program(FIELD);
   const compose = program(COMPOSE);
-  const walk = program(PARTICLE_V, PARTICLE_F);
-  if (!field || !compose || !walk) return null;
+  if (!field || !compose) return null;
 
   const buf = gl.createBuffer();
   gl.bindBuffer(gl.ARRAY_BUFFER, buf);
   gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([-1, -1, 3, -1, -1, 3]), gl.STATIC_DRAW);
-  const fullScreen = () => {
-    gl.bindBuffer(gl.ARRAY_BUFFER, buf);
-    gl.enableVertexAttribArray(0);
-    gl.disableVertexAttribArray(1);
-    gl.vertexAttribPointer(0, 2, gl.FLOAT, false, 0, 0);
-  };
+  gl.enableVertexAttribArray(0);
+  gl.vertexAttribPointer(0, 2, gl.FLOAT, false, 0, 0);
 
   const texture = (unit, filter, wrap) => {
     const t = gl.createTexture();
@@ -1000,21 +865,13 @@ function createScene() {
   gl.pixelStorei(gl.UNPACK_ALIGNMENT, 1);
   gl.texImage2D(gl.TEXTURE_2D, 0, gl.LUMINANCE, 64, 64, 0, gl.LUMINANCE, gl.UNSIGNED_BYTE, blueNoise());
 
-  // unit 3: the field (render target) · 5: the walking dots (render target, read by the field pass)
+  // unit 3: the field (render target)
   const fieldTex = texture(3, gl.NEAREST, gl.CLAMP_TO_EDGE);
   const fbo = gl.createFramebuffer();
-  const walkTex = texture(5, gl.NEAREST, gl.CLAMP_TO_EDGE);
-  const walkFbo = gl.createFramebuffer();
-  const walkers = buildWalkers(wm, br);
-  const walkCount = walkers.length / 8;
-  const walkBuf = gl.createBuffer();
-  gl.bindBuffer(gl.ARRAY_BUFFER, walkBuf);
-  gl.bufferData(gl.ARRAY_BUFFER, walkers, gl.STATIC_DRAW);
 
   const locs = (p, names) => Object.fromEntries(names.map((n) => [n, gl.getUniformLocation(p, n)]));
-  const UF = locs(field, ["uDev", "uE", "uEV", "uER", "uW[0]", "uTime", "uBlue", "uCells", "uCell", "uPaper", "uIntro", "uLogo", "uTexScale", "uTexOff", "uTexPerCell", "uLet[0]", "uBrand", "uRev", "uRevV", "uN", "uLink", "uPulse", "uSea", "uEnergy", "uFocus", "uFocusAmt", "uInk", "uMask", "uParticles"]);
+  const UF = locs(field, ["uDev", "uE", "uEV", "uER", "uW[0]", "uTime", "uBlue", "uCells", "uCell", "uPaper", "uIntro", "uLogo", "uTexScale", "uTexOff", "uTexPerCell", "uLet[0]", "uBrand", "uRev", "uRep", "uN", "uLink", "uPulse", "uSea", "uEnergy", "uFocus", "uFocusAmt", "uInk", "uMask"]);
   const UC = locs(compose, ["uField", "uCells", "uCell"]);
-  const UW = locs(walk, ["uLogo", "uCells", "uCell", "uLet[0]", "uTime", "uRev", "uRevV"]);
 
   gl.useProgram(field);
   gl.uniform1i(UF.uMask, 0);
@@ -1024,7 +881,6 @@ function createScene() {
   gl.uniform2f(UF.uTexOff, MARGIN / wm.tw, MARGIN / wm.th);
   gl.uniform3fv(UF.uInk, INK);
   gl.uniform3fv(UF.uPaper, PAPER);
-  gl.uniform1i(UF.uParticles, 5);
   gl.useProgram(compose);
   gl.uniform1i(UC.uField, 3);
 
@@ -1052,11 +908,6 @@ function createScene() {
     gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, cells[0], cells[1], 0, gl.RGBA, gl.UNSIGNED_BYTE, null);
     gl.bindFramebuffer(gl.FRAMEBUFFER, fbo);
     gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, fieldTex, 0);
-    gl.activeTexture(gl.TEXTURE5);
-    gl.bindTexture(gl.TEXTURE_2D, walkTex);
-    gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, cells[0], cells[1], 0, gl.RGBA, gl.UNSIGNED_BYTE, null);
-    gl.bindFramebuffer(gl.FRAMEBUFFER, walkFbo);
-    gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, walkTex, 0);
     gl.bindFramebuffer(gl.FRAMEBUFFER, null);
   }
 
@@ -1113,31 +964,9 @@ function createScene() {
     const [cx, cy] = toDev(cu.x + hr.left, cu.y + hr.top);
     const rev = [cx, cy, CURTAIN_R * h * dpr, cu.amt];
 
-    // pass 0: the walking dots, one point per dot, into their own cell texture (only while something changes)
-    gl.bindFramebuffer(gl.FRAMEBUFFER, walkFbo);
-    gl.viewport(0, 0, cells[0], cells[1]);
-    gl.clearColor(0, 0, 0, 0);
-    gl.clear(gl.COLOR_BUFFER_BIT);
-    if (cu.amt > 0.001 || letters.some((L) => L.amt > 0 && L.amt < 1)) {
-      gl.useProgram(walk);
-      gl.bindBuffer(gl.ARRAY_BUFFER, walkBuf);
-      gl.enableVertexAttribArray(0);
-      gl.enableVertexAttribArray(1);
-      gl.vertexAttribPointer(0, 4, gl.FLOAT, false, 32, 0);
-      gl.vertexAttribPointer(1, 4, gl.FLOAT, false, 32, 16);
-      gl.uniform4fv(UW.uLogo, logo);
-      gl.uniform2f(UW.uCells, cells[0], cells[1]);
-      gl.uniform1f(UW.uCell, CELL);
-      gl.uniform4fv(UW["uLet[0]"], letterUniform);
-      gl.uniform1f(UW.uTime, state.time);
-      gl.uniform4fv(UW.uRev, rev);
-      gl.uniform2f(UW.uRevV, cu.vx * dpr, -cu.vy * dpr);
-      gl.drawArrays(gl.POINTS, 0, walkCount);
-    }
-
     // pass 1: the field, one fragment per cell
-    fullScreen();
     gl.bindFramebuffer(gl.FRAMEBUFFER, fbo);
+    gl.viewport(0, 0, cells[0], cells[1]);
     gl.useProgram(field);
     setCommon(UF);
     gl.uniform4fv(UF.uLogo, logo);
@@ -1145,7 +974,7 @@ function createScene() {
     gl.uniform1f(UF.uIntro, state.intro);
     gl.uniform4fv(UF["uLet[0]"], letterUniform);
     gl.uniform4fv(UF.uRev, rev);
-    gl.uniform2f(UF.uRevV, cu.vx * dpr, -cu.vy * dpr);
+    gl.uniform1f(UF.uRep, cu.rep);
     const e = state.e;
     const [nx, ny] = toDev(e.tx + hr.left, e.ty + hr.top);
     gl.uniform4f(UF.uN, nx, ny, e.on && !reduce ? 1 : 0, NUCLEUS_R * dpr * (1 + 0.25 * state.linkAmt));
@@ -1200,7 +1029,7 @@ function createScene() {
     return out.toDataURL("image/png");
   }
 
-  return { draw, rectDev, cropCells, walkCount, finish: () => gl.finish() };
+  return { draw, rectDev, cropCells, finish: () => gl.finish() };
 }
 
 // One semi-implicit step of a damped spring: o[k] moves toward target, o[v] is its velocity. [ω, ζ]: ζ = 1 is
@@ -1318,6 +1147,9 @@ function update(now, dt) {
   spring(cu, "x", "vx", e.tx, CURTAIN_SPRING, dt);
   spring(cu, "y", "vy", e.ty, CURTAIN_SPRING, dt);
   cu.amt += (1 - Math.exp(-dt * (active ? CURTAIN_OPEN : CURTAIN_CLOSE))) * ((active ? 1 : 0) - cu.amt);
+  // the repel is viscous: an underdamped spring, slow to open, slower to close, a touch of overshoot at most
+  spring(cu, "rep", "rv", active ? 1 : 0, active ? REPEL_OPEN : REPEL_CLOSE, dt);
+  cu.rep = clamp(cu.rep, 0, 1.08);
 
   updateLetters(now);
 
@@ -1418,8 +1250,7 @@ if (new URLSearchParams(location.search).has("debug")) {
     letters,
     // the stand-alone cycle: ms into it (null while paused by pointer input) and each letter's amount
     cycle: () => ({ phase: cycleStart === null ? null : Math.round(performance.now() - cycleStart), pulse: +state.pulse.toFixed(2), amt: letters.map((L) => +L.amt.toFixed(2)) }),
-    // how many walking-dot pairs were built, and a timed draw (ms, CPU side plus a GPU finish) for cost checks
-    walkers: () => scene?.walkCount,
+    // a timed draw (ms, CPU side plus a GPU finish) for cost checks
     drawCost(n = 60) {
       const t = performance.now();
       for (let i = 0; i < n; i++) scene?.draw();

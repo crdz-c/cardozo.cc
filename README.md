@@ -5,8 +5,8 @@ Source of [cardozo.cc](https://cardozo.cc) — Lucas Cardozo, product designer.
 One screen: the **CRDZC** wordmark, centred, drawn as dots in a single dithered dot field. **Each letter is a link**,
 and under each letter lies the mark of its link (envelope, LinkedIn, Dribbble, Medium, GitHub). The pointer opens the
 wordmark like a curtain and reveals the marks beneath it; left alone, the letters turn into their marks on their own
-and every 9 seconds everything converges back into CRDZC. Every change of shape is the same morph: the dots
-walk to their places in the next form. The pointer is drawn as a dot with a gradient (the system cursor is hidden); a click
+and every 9 seconds everything converges back into CRDZC. A letter's own change melts one shape into the other;
+under the pointer the dots part like oil on water. The pointer is drawn as a dot with a gradient (the system cursor is hidden); a click
 on the background sends one long, quiet ring across the screen. No build step, no dependencies (native ES modules).
 
 ```
@@ -58,40 +58,40 @@ Keyboard focus shows that letter's mark and a dotted underline under it until fo
   tone, so a mark is made of the same dots with the same soft edge. **Tone** (texture alpha) scales dot density (down
   to `TONE_DENS` 0.3) and brightness (down to `TONE_BRIGHT` 0.5): the envelope has a bright flap (1.0), lighter
   sides (0.4), a mid-tone bottom (0.68) and a cut-out gap along the flap. The other marks are single-tone.
-- A letter's state is one number, 0 (letter) … 1 (mark). **Every change is a morph in which the dots walk**: at
-  load, the dots of each letter (as mirrored) and of its mark are sampled on the dot lattice (80 rows per wordmark
-  height, the shader's own density rule), ordered along a Hilbert curve and paired by rank, a cheap approximate
-  optimal transport, so paths stay short and rarely cross; the smaller set is reused so every dot of both shapes
-  takes part (a few split or merge on the way). About 1,600 pairs per letter, ~8,200 in all (8,170 measured), built once. While a
-  letter changes, its still dots give way to these walking dots: each sets off at its own moment (`WALK_SPREAD` 0.55
-  of the morph; half random, half a smooth function of place, so the motion ripples through the shape), eases along
-  a slightly curved path (`WALK_CURVE` 0.18 of its length) with a little wander (`WALK_WOBBLE` 0.012 letter
-  heights), dims mid-way (`WALK_DIP` 0.45) and brightens on arrival, at `WALK_TONE` 0.85 of the shape's tone. Dots
-  keep their size and land back on the checkerboard lattice; in flight they may be anywhere. Over the first and last
-  `WALK_EDGE` 0.1 of a morph the walking dots and the still ones hand over to each other dot by dot. They are drawn
-  as single-cell points into their own texture, which the field pass reads, so the pointer and the focus underline
-  stay on top. Nothing is scaled, so the outer letters cannot stretch. A morph takes `MORPH_MS` 1300–1700 ms (cubic
-  in-out), shorter when it starts part-way, and can be retargeted mid-way without a jump. The same mechanism carries
-  the autonomous morphs, the convergence and the curtain.
+- A letter's state is one number, 0 (letter) … 1 (mark). **A letter's own change is a melt**: the two shapes' signed
+  distances are blended, so one shape flows into the other as a single coherent mass, with no particles and no
+  fragments. The moment shifts a little across the letter along a smooth noise (`MELT_RIPPLE` 0.25 at
+  `MELT_NOISE` 1.4 per letter height), so the change ripples through it; space bends gently mid-way along a slow flow
+  field (`MELT_WARP` 0.06 letter heights); intensities dip and rise (`MELT_DIP` 0.35). It is continuous in time and
+  space, so every display frame shows a slightly different stage. Nothing is scaled, so the outer letters cannot
+  stretch. A change takes `MORPH_MS` 1000–1400 ms (cubic in-out), shorter when it starts part-way, and can be
+  retargeted mid-way without a jump. The same melt carries the autonomous changes and the 9 s convergence.
 - The letters keep a random orientation (mirrored or not, per axis) as a static identity for the visit; it never
   animates. Marks are always upright.
 
 ## The curtain (hover)
 
-The pointer parts the wordmark like fabric and reveals the marks beneath. The opening is irregular and alive: its
-boundary is domain-warped by two octaves of slowly flowing noise (`CURTAIN_WARP` 0.35, never a circle or an ellipse),
-so it keeps changing even under a still pointer. It has inertia and drag: it trails the pointer on a soft spring
-(`CURTAIN_SPRING` ω 10, critically damped), stretches along the motion (`CURTAIN_STRETCH` 0.6) and widens across it
-(`CURTAIN_WIDEN` 0.25) when the pointer moves fast, relaxing when it slows. Its size is `CURTAIN_R` 0.85 wordmark
-heights. Its edge is a wide band (`CURTAIN_BAND` ± 0.5 of the radius) in which the morph switches sites at random, so
-the letter dissolves into the mark dot by dot, never along a rim. Along that band the letter dots are gathered aside
-(`CURTAIN_GATHER` 0.08 of the radius), shifted in slow undulating folds (`CURTAIN_FOLD` 0.05) and bunch up
-(`CURTAIN_BUNCH` +35 % density), like cloth drawn back. Only the part of a letter under the opening shows its mark.
-Behind the pointer the letters re-form the same ragged way, some dots lingering. The opening grows at `CURTAIN_OPEN`
-10/s and fades at `CURTAIN_CLOSE` 3/s once the pointer leaves or rests for `IDLE_MS` 3 s; it works from halfway
-through the loading build (`CURTAIN_FROM` 0.5); on touch it follows the finger while it is down. The revealed layer is
-a texture in the same layout as the wordmark (`buildBrandTexture`), so another layer (an image, another SVG) can be
-revealed the same way by building a different texture.
+The pointer opens the wordmark like a curtain and reveals the marks beneath. The curtain is a soft disc around the
+pointer (`CURTAIN_R` 0.85 wordmark heights), its edge feathered over `CURTAIN_FEATHER` 0.35 of the radius and gently,
+slowly wobbled by noise (`CURTAIN_WOBBLE` 0.18). It rides a spring (`CURTAIN_SPRING` ω 16, critically damped), so it
+trails the pointer a little and the letters re-form behind it. Under it, each lattice site switches from the letter to
+the mark at its own moment (its blue-noise rank mixed `MORPH_RIPPLE` 0.5 with a smooth noise at `MORPH_NOISE` 2.2),
+taking `MORPH_SOFT` 0.08 of the reveal, drifting up to `MORPH_DRIFT` 0.05 letter heights toward the new shape and
+dimming by `MORPH_DIP` 0.6 while it does. Only the part of a letter under it shows its mark. It opens at
+`CURTAIN_OPEN` 10/s and closes at `CURTAIN_CLOSE` 3/s, once the pointer leaves or rests for `IDLE_MS` 3 s; it works
+from halfway through the loading build (`CURTAIN_FROM` 0.5); on touch it follows the finger while it is down.
+
+**Oil on water.** On top of that, the surface film of dots (the letters and the field around) is pushed radially
+away from the curtain's centre along smooth flow lines, leaving a clean opening where the mark reads clearly. Material
+at radius x moves to x + D(x), with D = `REPEL` 0.5 × radius × e^(−(x / `REPEL_W` 0.9 × radius)²); the shader inverts
+that per cell (four fixed-point steps), so the opening is empty, its edge softened over `REPEL_SOFT` 0.12 of the
+radius, and the film is compressed just outside it into a soft, denser rim (up to `REPEL_RIM` 1.6×), like the bead at
+the edge of oil. The map never folds (the push stays below the rate at which it decays), so nothing breaks into loose
+fragments. It is viscous: it opens on a slightly underdamped spring (`REPEL_OPEN` ω 7, ζ 0.8) and flows back on a
+slower one (`REPEL_CLOSE` ω 3.2, ζ 1), and it rides the curtain's lagging centre. The marks beneath do not move.
+
+The revealed layer is a texture in the same layout as the wordmark (`buildBrandTexture`), so another layer (an image,
+another SVG) can be revealed the same way by building a different texture.
 
 ## Stand-alone: the 9-second cycle
 
@@ -103,8 +103,8 @@ Once nothing has touched the pointer for `IDLE_MS` (3 s), the letters run on the
 | 700–3600 (`SOLO_AT`) | each letter morphs into its mark at its own random moment |
 | +1700–2600 (`SOLO_BACK_AFTER`) | with a 50 % chance (`SOLO_BACK`) a letter morphs back on its own |
 | 6000–9600 (`PULSE_AT`, `PULSE_MS` 3600) | the convergence pulse: letters 30 % denser (`PULSE_L`), field 45 % thinner (`PULSE_THIN`) and gathered 5 % toward the wordmark (`PULSE_GATHER`), peaking at ~7.8 s |
-| 6200–6700 (`CONVERGE_AT` + `CONVERGE_STAGGER`) | every letter still showing its mark morphs back; all letters again by ~8.4 s |
-| 8400–9700 | hold: the pure wordmark around the cycle boundary |
+| 6200–6700 (`CONVERGE_AT` + `CONVERGE_STAGGER`) | every letter still showing its mark melts back; all letters again by ~8.1 s |
+| 8100–9700 | hold: the pure wordmark around the cycle boundary |
 
 Pointer input pauses the cycle: letters showing marks morph back (the curtain shows marks where the pointer is). The
 cycle restarts from its hold 3 s after the last input, so it never jumps. A letter with keyboard focus is left alone.
@@ -143,15 +143,13 @@ cycle restarts from its hold 3 s after the last input, so it never jumps. A lett
   and brightness swell 0.4 (`WAVE_DENS`). No echo ring. Up to 6 overlap; none under reduced motion.
 - **Size.** The wordmark is 39 vw wide (60 vw under 700 px), fixed in the exact centre.
 
-## Loading: a particle build-up
+## Loading: the letters fill with dots
 
-The letters form the way the double-slit experiment's pattern does: particles land one by one at random and the
-shape emerges only by accumulation (an analogy; there are no fringes). Every lattice site has its own arrival moment
-(its blue-noise rank) and arrives at a rate set by its probability: a letter's core is likelier than its edges
-(`BUILD_CORE` 0.65), unevenly (smooth noise, `BUILD_CLUMP` 0.4); both relax between 30 % and 90 % of the build so
-every site arrives (`BUILD_GAIN` 1.15) and the build ends exactly in the resting wordmark. Early on a few scattered dots
-land around the letters too (`BUILD_SCATTER` 0.3, following the field), fading as the letters win. Each dot flashes as
-it lands and settles (`FLASH` 0.06 of the build); arrived letter dots stay. No text, no counter, no sweep.
+Only the letters load. Every lattice site inside them has its own arrival moment (its blue-noise rank) and lands when
+the fill passes it (`BUILD_GAIN` 1.03), so dots land at random all over the five letters, at the rate of the curve
+below, each flashing as it lands and settling (`FLASH` 0.06 of the build). The letters are dimmer until the last
+quarter of the build. The field around is simply there from the first frame, at its normal quiet density, and
+nothing in it reacts to the build. No text, no counter, no sweep, no stray dots outside the letters.
 
 The arrival rate follows Lucas's sketch (`BUILD_RATE`): segments on the normalised timeline, each `[from t, to t,
 from v, to v, shape]` with v a share of the top rate and shape linear, a decay that is fast first and flattens
@@ -193,16 +191,17 @@ trademarks of their owners and are used only to link to Lucas's own profiles. To
 ## Knobs
 
 Shader (`FIELD` / `PUSH` in `hero.js`): `DENS_L` 0.72 · `DENS_WAVE` 0.25 · `DENS_E` 0.3 · `EDGE_SOFT` 3.6 cells ·
-`EDGE_HOVER` 0.3 · `EDGE_NOISE` 2.2 · `TONE_DENS` 0.3 · `TONE_BRIGHT` 0.5 · `WALK_SPREAD` 0.55 · `WALK_CURVE` 0.18 · `WALK_WOBBLE` 0.012 · `WALK_DIP` 0.45 · `WALK_TONE` 0.85 · `WALK_EDGE` 0.1 · `CURTAIN_BAND` 0.5 · `CURTAIN_WARP` 0.35 ·
-`CURTAIN_STRETCH` 0.6 · `CURTAIN_WIDEN` 0.25 · `CURTAIN_GATHER` 0.08 · `CURTAIN_FOLD` 0.05 · `CURTAIN_BUNCH` 0.35 ·
-`PULSE_L` 0.3 · `PULSE_THIN` 0.45 · `PULSE_GATHER` 0.05 · `BUILD_CORE` 0.65 · `BUILD_CLUMP` 0.4 · `BUILD_SCATTER` 0.3 · `BUILD_GAIN` 1.15 ·
+`EDGE_HOVER` 0.3 · `EDGE_NOISE` 2.2 · `TONE_DENS` 0.3 · `TONE_BRIGHT` 0.5 · `MORPH_RIPPLE` 0.5 · `MORPH_NOISE` 2.2 · `MORPH_SOFT` 0.08 · `MORPH_DRIFT` 0.05 · `MORPH_DIP` 0.6 ·
+`MELT_RIPPLE` 0.25 · `MELT_NOISE` 1.4 · `MELT_WARP` 0.06 · `MELT_DIP` 0.35 · `CURTAIN_FEATHER` 0.35 · `CURTAIN_WOBBLE` 0.18 ·
+`REPEL` 0.5 · `REPEL_W` 0.9 · `REPEL_SOFT` 0.12 · `REPEL_RIM` 1.6 ·
+`PULSE_L` 0.3 · `PULSE_THIN` 0.45 · `PULSE_GATHER` 0.05 · `BUILD_GAIN` 1.03 ·
 `FLASH` 0.06 · `DOT_FADE` 0.12 · `DOT_FLOOR` 0.3 · `TONE_L` 0.97 · `TWINKLE` 0.3 · `FIELD_TINT` · `SEA_AMP` 0.9 ·
 `SEA_STIR` 4.0 · `SEA_GLOBAL` 1.2 · `SEA_SCALE` 0.3 · `SEA_SPEED` 0.05 · `SEA_RIPPLE` 0.07 · `GRAD_R` 0.6 · `GRAD_D`
 0.95 · `MOAT` 1.5 · `PUSH_AMT` 0.6 · `DEFLECT` 0.35 · `RING` 0.75 · `THIN` 0.6 · `WAKE` 0.5 · `STRETCH` 0.1 ·
 `BREATHE` 0.03 · `WAVE_SPEED` 1.05 · `WAVE_WIDTH` 0.1 · `WAVE_PUSH` 0.008 · `WAVE_DENS` 0.4.
 JS (top of `hero.js`): `POINTER_R` 32 px · `NUCLEUS_R` 4 px · `POINTER_SPRING` [30, 1] · `POINTER_LAG` 0.3 ·
-`AFTERGLOW` 2.8 s · `MAX_SPEED` 2400 px/s · `CURTAIN_R` 0.85 · `CURTAIN_SPRING` [10, 1] · `CURTAIN_OPEN` 10/s ·
-`CURTAIN_CLOSE` 3/s · `IDLE_MS` 3000 · `MORPH_MS` 1300–1700 · `CYCLE_MS` 9000 · `SOLO_AT` 700–3600 · `SOLO_BACK` 0.5 ·
+`AFTERGLOW` 2.8 s · `MAX_SPEED` 2400 px/s · `CURTAIN_R` 0.85 · `CURTAIN_SPRING` [16, 1] · `REPEL_OPEN` [7, 0.8] · `REPEL_CLOSE` [3.2, 1] · `CURTAIN_OPEN` 10/s ·
+`CURTAIN_CLOSE` 3/s · `IDLE_MS` 3000 · `MORPH_MS` 1000–1400 · `CYCLE_MS` 9000 · `SOLO_AT` 700–3600 · `SOLO_BACK` 0.5 ·
 `SOLO_BACK_AFTER` 1700–2600 · `CONVERGE_AT` 6200 · `CONVERGE_STAGGER` 500 · `PULSE_AT` 6000 · `PULSE_MS` 3600 ·
 `WAVE_LIFE` 2.6 s · `MAX_WAVES` 6 · `BUILD_RATE` (above) · `BUILD_S` 8 s · `BUILD_QUICK` 2.8 s · `CURTAIN_FROM` 0.5 · `BRAND_H` 9.5
 units · `BRAND_ROUND` [4, 3] texels · `ROUND_OPEN` / `ROUND_CLOSE` 17 / 9 texels. Ink `#000000`, paper `#f0efea`.
