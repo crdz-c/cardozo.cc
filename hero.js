@@ -35,68 +35,73 @@ const state = {
 };
 
 // ------------------------------------------------------------------ per-letter flips
-// Every so often a letter flips — horizontally or vertically, at random — holds for a moment, then
-// flips back. The pointer can start one too. The flip itself runs in the shader (scale through zero).
+// Every letter starts in a random orientation (flipped horizontally and/or vertically, or not at all).
+// After that a letter only changes when the pointer touches it (or on a tap): it flips around its own
+// centre, horizontally or vertically at random. The flip itself runs in the shader (scale through zero).
 const LETTERS = 5;
 const LETTER_EDGES = [-1, 18.55 / 90, 36.15 / 90, 54.75 / 90, 71.15 / 90, 2]; // gap midpoints, in u
 // C and D look identical flipped vertically, so they lean horizontal; R and Z are fair game
 const HORIZONTAL_BIAS = [0.8, 0.5, 0.8, 0.5, 0.8];
 const flipUniform = new Float32Array(LETTERS * 2).fill(1);
 const flips = Array.from({ length: LETTERS }, () => ({
-  mx: 1, my: 1, axis: "x", back: false, phase: "wait", t0: 0, dur: 0, until: 0, nextAt: Infinity,
+  mx: Math.random() < 0.5 ? 1 : -1, // random starting orientation, every load
+  my: Math.random() < 0.5 ? 1 : -1,
+  axis: "x",
+  flipping: false,
+  t0: 0,
+  dur: 0,
 }));
+const letterGroups = [...logoSvg.querySelectorAll(".lt")];
 let flipsArmed = false;
 const rand = (a, b) => a + Math.random() * (b - a);
 
-function startFlip(i, now, back) {
+flips.forEach((f, i) => {
+  flipUniform[i * 2] = f.mx;
+  flipUniform[i * 2 + 1] = f.my;
+});
+
+// no-WebGL fallback: the SVG letters follow the same state
+function flipSvg() {
+  letterGroups.forEach((g, i) => {
+    g.style.transform = `scale(${flipUniform[i * 2] || 0.001}, ${flipUniform[i * 2 + 1] || 0.001})`;
+  });
+}
+
+function startFlip(i, now) {
   const f = flips[i];
-  if (f.phase === "flip") return;
-  if (!back) f.axis = Math.random() < HORIZONTAL_BIAS[i] ? "x" : "y";
-  f.phase = "flip";
-  f.back = back;
+  if (f.flipping) return;
+  f.axis = Math.random() < HORIZONTAL_BIAS[i] ? "x" : "y";
+  f.flipping = true;
   f.t0 = now;
   f.dur = rand(620, 900);
 }
 
-function armFlips() {
-  if (reduce || flipsArmed) return;
-  flipsArmed = true;
-  const now = performance.now();
-  flips.forEach((f, i) => {
-    f.phase = "idle";
-    f.nextAt = now + rand(1800, 4200) + i * 350;
-  });
-}
-
 function updateFlips(now) {
   flips.forEach((f, i) => {
-    if (f.phase === "idle" && now >= f.nextAt) startFlip(i, now, false);
-    else if (f.phase === "dwell" && now >= f.until) startFlip(i, now, true);
-
     let sx = f.mx;
     let sy = f.my;
-    if (f.phase === "flip") {
-      const done = now - f.t0 >= f.dur;
-      const s = Math.cos(Math.PI * easeInOutCubic(clamp01((now - f.t0) / f.dur)));
+    if (f.flipping) {
+      const t = clamp01((now - f.t0) / f.dur);
+      const s = Math.cos(Math.PI * easeInOutCubic(t));
       if (f.axis === "x") sx = f.mx * s;
       else sy = f.my * s;
-      if (done) {
+      if (t >= 1) {
         if (f.axis === "x") f.mx *= -1;
         else f.my *= -1;
         sx = f.mx;
         sy = f.my;
-        if (f.back) {
-          f.phase = "idle";
-          f.nextAt = now + rand(2600, 7000);
-        } else {
-          f.phase = "dwell";
-          f.until = now + rand(1400, 3200);
-        }
+        f.flipping = false;
       }
     }
     flipUniform[i * 2] = sx;
     flipUniform[i * 2 + 1] = sy;
   });
+  if (!scene) flipSvg();
+}
+
+function measureLogo() {
+  const r = logoSvg.getBoundingClientRect();
+  state.logoCss = [r.left, r.top, r.width, r.height];
 }
 
 function letterAt(clientX, clientY) {
@@ -115,10 +120,7 @@ function pointerLetter(e, force) {
   const entered = i !== overLetter;
   overLetter = i;
   if (i < 0 || !(entered || force)) return;
-  const f = flips[i];
-  const now = performance.now();
-  if (f.phase === "idle") startFlip(i, now, false);
-  else if (f.phase === "dwell") startFlip(i, now, true); // poke a flipped letter to put it back
+  startFlip(i, performance.now());
 }
 
 // ------------------------------------------------------------------ wordmark texture
@@ -284,17 +286,39 @@ vec4 maskAt(vec2 tc) {
   return texture2D(uMask, tc) * inside;
 }
 
+// Organic distance from the wordmark's centre: 1 at the wordmark, fading to ~0 at the far edges.
+// It is measured in screen-relative units, so it is an ellipse inscribed in whatever shape the
+// screen has (wide desktop, tall phone), and noise warps it so it reads like a cloud, not a circle.
+float gradAt(vec2 posPx, vec2 lc) {
+  vec2 pn = (posPx - lc) / (0.5 * uRes);   // -1..1 across the screen
+  vec2 pc = (posPx - lc) / uRes.y;         // for the noise lookups
+  vec2 warp = vec2(
+    vnoise(vec3(pc * 1.5 + vec2(3.1, 1.7), uTime * 0.05)),
+    vnoise(vec3(pc * 1.5 + vec2(8.2, 4.4), uTime * 0.05 + 9.0))
+  ) - 0.5;
+  float gd = length(pn + warp * 0.95);
+  return exp(-gd * gd * 2.25);
+}
+
 void main() {
   vec2 frag = gl_FragCoord.xy;
+  vec2 lc = uLogo.xy + 0.5 * uLogo.zw; // wordmark centre, in px
 
-  // lens: the dither grid gets finer around the light / pointer
+  // pointer / light: a lens with a noise-wobbled edge
   vec2 mpx = (uMouse * 0.5 + 0.5) * uRes;
   float dm = length(frag - mpx) / uRes.y;
+  dm *= 1.0 + 0.7 * (vnoise(vec3(frag / uRes.y * 3.0, uTime * 0.2)) - 0.5);
   float k = smoothstep(0.03, 0.26, dm / (0.45 + uHover * 0.55));
-  float px = max(1.0, floor(uPx * mix(0.4, 1.0, k)));
+
+  // resolution gradient: pixels are finest at the wordmark and grow toward the edges.
+  // Hovering sharpens everything a little, and a lot around the pointer.
+  float g0 = gradAt(frag, lc);
+  float px = uPx * mix(0.55, 1.9, 1.0 - g0) * (1.0 - 0.22 * uHover) * mix(0.4, 1.0, k);
+  px = max(1.0, floor(px));
 
   vec2 cell = floor(frag / px);
   vec2 c = (cell + 0.5) * px;
+  float g = gradAt(c, lc);
 
   // wordmark space: u along it, v up, and a copy in units of the wordmark's height
   vec2 q0 = (c - uLogo.xy) / uLogo.zw;
@@ -329,7 +353,8 @@ void main() {
   vec4 t = maskAt(tcL);
   float cov = smoothstep(0.35, 0.65, t.r) * inBox * clip;
   float hgt = t.g;
-  float glow = pow(maskAt(tcG).b, 2.4) * clip * (0.5 + 0.5 * abs(fs.x * fs.y));
+  float bRaw = maskAt(tcG).b;
+  float glow = pow(bRaw, 2.4) * clip * (0.5 + 0.5 * abs(fs.x * fs.y));
 
   // a gentle bevel, mirrored along with the letter
   vec2 d = 2.0 / uTexSize;
@@ -353,14 +378,20 @@ void main() {
   float keyL = max(dot(n, normalize(vec3(-0.45, 0.65, 0.62))), 0.0);
   float rim = pow(1.0 - hgt, 2.0);
   float lit = clamp(att * 1.5 + pl * 0.8, 0.0, 1.0);
-  float lumL = (mix(0.94, 1.06, lit) + 0.03 * keyL - 0.06 * rim) * (0.97 + 0.06 * nz);
+  float lumL = (mix(0.97, 1.06, lit) + 0.03 * keyL - 0.06 * rim) * (0.98 + 0.04 * nz);
 
-  // outside the letters: a dithered halo hugging them, and a field of dots across the WHOLE screen that
-  // wakes up around the pointer (or around the idle light) and burns brighter while you hover
-  float edgeFade = smoothstep(0.0, 0.1, min(frag.y, uRes.y - frag.y) / uRes.y); // a touch calmer behind the labels
-  float field = 0.026 + 0.018 * fbm(vec3(c / uRes.y * 3.2, uTime * 0.1));
+  // outside the letters: a cloud of pixels, dense around the wordmark and thinning toward the
+  // edges (organically, through noise), a thin clean moat so the letters stay crisp, and a bloom
+  // under the pointer that burns brighter while you hover
+  vec2 pcc = (c - lc) / uRes.y;
+  float edgeFade = smoothstep(0.0, 0.14, min(frag.y, uRes.y - frag.y) / uRes.y); // calm zone behind the labels
+  float cloud = pow(g, 1.25) * 0.36 * (0.7 + 0.6 * vnoise(vec3(pcc * 5.0, uTime * 0.08))) * (0.35 + 0.65 * edgeFade);
+  float scatter = 0.012 + 0.012 * vnoise(vec3(pcc * 2.0 + 4.0, uTime * 0.06));
+  float moat = 1.0 - 0.9 * smoothstep(0.8, 0.97, bRaw);
   float near = exp(-dm * dm * 26.0);
-  float lumB = glow * (0.12 + 0.55 * att) + field * (0.3 + 0.7 * edgeFade) + (0.08 + 0.26 * uHover) * near * (0.55 + 0.45 * edgeFade);
+  float lumB = (cloud + glow * (0.10 + 0.45 * att)) * moat
+             + scatter * (0.3 + 0.7 * edgeFade)
+             + (0.08 + 0.26 * uHover) * near * (0.55 + 0.45 * edgeFade);
   float star = step(0.9975, hash2(cell));
   float tw = 0.5 + 0.5 * sin(uTime * 2.0 + cell.x * 0.7);
   lumB += star * 0.5 * tw;
@@ -470,8 +501,7 @@ function createScene() {
     const hr = canvas.getBoundingClientRect();
     const r = logoSvg.getBoundingClientRect();
     state.logo = [(r.left - hr.left) * dpr, (hr.bottom - r.bottom) * dpr, r.width * dpr, r.height * dpr];
-    state.logoCss = [r.left, r.top, r.width, r.height];
-    state.px = clamp(r.height / 30, 2, 6.5) * dpr; // ~30 cells tall, whatever the screen
+    state.px = clamp(r.height / 55, 1.5, 4.5) * dpr; // fine pixels: ~55 across the wordmark's height
   };
   new ResizeObserver(() => {
     resize();
@@ -519,6 +549,9 @@ html.addEventListener("pointerleave", () => {
 // ------------------------------------------------------------------ loop
 const scene = createScene();
 if (scene) html.classList.add("gl");
+
+measureLogo();
+new ResizeObserver(measureLogo).observe(hero);
 
 let visible = true;
 new IntersectionObserver(([en]) => (visible = en.isIntersecting)).observe(hero);
@@ -575,7 +608,8 @@ const forced = new URLSearchParams(location.search).has("boot");
 async function boot() {
   if (reduce) {
     html.classList.add("ready");
-    scene?.draw();
+    if (scene) scene.draw();
+    else flipSvg();
     return;
   }
 
@@ -583,14 +617,14 @@ async function boot() {
 
   if (seen && !forced) {
     // returning visitor: skip the console, keep the entrance
-    html.classList.add("quick", "framed");
+    html.classList.add("quick");
     await tween(1300, (t) => {
       state.intro = t;
       state.pxMul = lerp(3, 1, easeOutCubic(t));
     });
     html.classList.remove("booting");
     html.classList.add("ready");
-    armFlips();
+    flipsArmed = true;
     return;
   }
 
@@ -598,7 +632,6 @@ async function boot() {
   const bar = hero.querySelector("[data-bar]");
   const lines = [...hero.querySelectorAll(".boot__log li")];
 
-  html.classList.add("framed");
   lines.forEach((li, i) => setTimeout(() => li.classList.add("on"), 250 + i * 380));
 
   // the counter runs; just before it lands, the wordmark starts to rise and resolve
@@ -619,7 +652,7 @@ async function boot() {
   await Promise.all([entrance, wait(260)]);
   html.classList.remove("booting");
   html.classList.add("ready");
-  armFlips();
+  flipsArmed = true; // from now on, letters flip when the pointer touches them
 
   try {
     sessionStorage.setItem("cc-boot", "1");

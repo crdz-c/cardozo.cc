@@ -1,8 +1,9 @@
 /* cardozo.cc — hero.
-   One screen: the CRDZC wordmark, full-bleed and centred, is the whole show. In WebGL it is a lit,
-   dithered, slowly wobbling object that follows the pointer; the inline SVG underneath is the
-   fallback. Ink stage, paper type, hairlines, condensed display + mono — visual direction borrowed
-   in spirit (not code) from christendijoux.com. */
+   One screen: the CRDZC wordmark, centred, is the whole show. In WebGL it is a flat, dithered object
+   whose letters flip on hover, sitting in a field of pixels that is fine and dense at the centre and
+   coarser and sparser toward the edges. The inline SVG underneath is the fallback. Ink stage, paper
+   type, hairlines, condensed display + mono — visual direction borrowed in spirit (not code) from
+   christendijoux.com. */
 
 @font-face {
   font-family: "Big Shoulders Display";
@@ -25,11 +26,11 @@
   --paper: #f2f2ee;
   --dim: rgba(242, 242, 238, 0.56);
   --line: rgba(242, 242, 238, 0.14);
+  --line-strong: rgba(242, 242, 238, 0.3);
 
   --font-display: "Big Shoulders Display", "Arial Narrow", Impact, sans-serif;
   --font-mono: "Geist Mono", ui-monospace, "SF Mono", Menlo, monospace;
 
-  --frame: 8px;
   --pad: clamp(16px, 2.8vw, 40px);
   --ease: cubic-bezier(0.16, 1, 0.3, 1);
 
@@ -72,7 +73,7 @@ a {
 
 :focus-visible {
   outline: 1px solid var(--paper);
-  outline-offset: 4px;
+  outline-offset: 3px;
 }
 
 .sr-only {
@@ -98,7 +99,7 @@ a {
   height: 100vh;
   height: 100svh;
   min-height: 520px;
-  padding: calc(var(--frame) + 10px) var(--pad);
+  padding: var(--pad);
   background: var(--ink);
   overflow: hidden;
 }
@@ -119,27 +120,6 @@ a {
   opacity: 1;
 }
 
-/* HUD frame: four hairlines inset from the viewport edge. Blended with `difference` so the line
-   inverts where the full-bleed wordmark crosses it. */
-.frame {
-  position: absolute;
-  inset: var(--frame);
-  z-index: 1;
-  pointer-events: none;
-  mix-blend-mode: difference;
-}
-
-.frame i {
-  position: absolute;
-  background: rgba(255, 255, 255, 0.3);
-  transition: transform 1.3s var(--ease);
-}
-
-.frame i:nth-child(1) { top: 0; left: 0; right: 0; height: 1px; transform-origin: left; }
-.frame i:nth-child(2) { top: 0; right: 0; bottom: 0; width: 1px; transform-origin: top; transition-delay: 0.1s; }
-.frame i:nth-child(3) { bottom: 0; left: 0; right: 0; height: 1px; transform-origin: right; transition-delay: 0.2s; }
-.frame i:nth-child(4) { top: 0; left: 0; bottom: 0; width: 1px; transform-origin: bottom; transition-delay: 0.3s; }
-
 /* ---------------------------------------------------------------- labels */
 
 .bar {
@@ -149,7 +129,7 @@ a {
   align-items: center;
   justify-content: space-between;
   gap: 24px;
-  min-height: 40px;
+  min-height: 24px;
   font-size: 11px;
   font-weight: 500;
   line-height: 1;
@@ -158,42 +138,57 @@ a {
   color: var(--dim);
 }
 
-.bar nav {
+/* ---------------------------------------------------------------- link container
+   One bordered box holding every link. Hairlines between the cells come from a 1px gap over the
+   container's background; cells grow to fill each row, so it wraps cleanly on small screens. */
+
+.dock {
+  position: relative;
+  z-index: 2;
+  display: flex;
+  justify-content: center;
+}
+
+.links {
   display: flex;
   flex-wrap: wrap;
-  justify-content: space-between;
-  gap: 10px clamp(16px, 3vw, 36px);
-  width: 100%;
+  gap: 1px;
+  width: min(100%, 780px);
+  background: var(--line-strong);
+  border: 1px solid var(--line-strong);
+  font-size: 11px;
+  font-weight: 500;
+  line-height: 1;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
 }
 
-.bar a {
-  position: relative;
-  padding-block: 6px;
+.links a {
+  flex: 1 1 auto;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 44px;
+  padding: 0 clamp(14px, 2vw, 22px);
+  background: rgba(5, 5, 5, 0.94);
   color: var(--paper);
+  white-space: nowrap;
+  transition: background 0.35s var(--ease), color 0.35s var(--ease);
 }
 
-.bar a::after {
-  content: "";
-  position: absolute;
-  left: 0;
-  right: 0;
-  bottom: 2px;
-  height: 1px;
-  background: currentColor;
-  transform: scaleX(0);
-  transform-origin: right;
-  transition: transform 0.5s var(--ease);
+.links a:hover,
+.links a:focus-visible {
+  background: var(--paper);
+  color: var(--ink);
 }
 
-.bar a:hover::after,
-.bar a:focus-visible::after {
-  transform: scaleX(1);
-  transform-origin: left;
+.links a:focus-visible {
+  outline-offset: -4px;
 }
 
 /* ---------------------------------------------------------------- the logo
-   Full-bleed (no side padding) and vertically centred. The SVG is the real, accessible wordmark and
-   the no-WebGL fallback; once WebGL is running the canvas draws it instead. */
+   Centred. The SVG is the real, accessible wordmark and the no-WebGL fallback; once WebGL is running
+   the canvas draws it instead. */
 
 .logo {
   position: absolute;
@@ -216,6 +211,11 @@ a {
 
 .gl .logo svg {
   visibility: hidden; /* keeps its box: JS measures it to place the WebGL wordmark */
+}
+
+.logo .lt {
+  transform-box: fill-box;
+  transform-origin: center;
 }
 
 .logo path {
@@ -254,7 +254,7 @@ a {
 .boot__log {
   position: absolute;
   left: var(--pad);
-  bottom: calc(var(--frame) + 62px + var(--count-size) * 0.8 + 22px);
+  bottom: calc(var(--pad) + 30px + var(--count-size) * 0.8 + 22px);
   width: min(300px, 70vw);
   list-style: none;
   padding: 0;
@@ -295,7 +295,7 @@ a {
 .boot__count {
   position: absolute;
   left: var(--pad);
-  bottom: calc(var(--frame) + 62px);
+  bottom: calc(var(--pad) + 30px);
   font-family: var(--font-display);
   font-size: var(--count-size);
   font-weight: 300;
@@ -309,7 +309,7 @@ a {
   position: absolute;
   left: var(--pad);
   right: var(--pad);
-  bottom: calc(var(--frame) + 50px);
+  bottom: calc(var(--pad) + 14px);
   height: 1px;
   background: var(--line);
 }
@@ -329,8 +329,6 @@ a {
 /* ---------------------------------------------------------------- states
    .booting  → everything waits just off-stage.  .ready → it all settles in. */
 
-.js.booting .frame i:nth-child(odd) { transform: scaleX(0); }
-.js.booting .frame i:nth-child(even) { transform: scaleY(0); }
 .js.booting .logo path { transform: translateY(112%); }
 .js.booting .rise { opacity: 0; transform: translateY(8px); }
 
@@ -338,18 +336,15 @@ a {
   transition: opacity 0.9s ease 0.5s, transform 0.9s var(--ease) 0.5s;
 }
 
-/* the frame draws in during boot, so it is released before .ready */
-.js.booting.framed .frame i:nth-child(odd) { transform: none; }
-.js.booting.framed .frame i:nth-child(even) { transform: none; }
-
 /* ---------------------------------------------------------------- small screens */
 
 @media (max-width: 699.98px) {
   .logo { width: 80vw; }
   .bar { font-size: 10px; letter-spacing: 0.12em; }
-  .bar nav { justify-content: flex-start; gap: 6px 20px; }
+  .links { font-size: 10px; letter-spacing: 0.12em; }
+  .links a { min-height: 42px; padding: 0 12px; }
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .frame i, .logo path, .rise, .scene, .boot { transition: none; }
+  .logo path, .rise, .scene, .boot, .links a { transition: none; }
 }
