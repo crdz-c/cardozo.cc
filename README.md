@@ -42,22 +42,23 @@ Open <http://localhost:8000>. The boot sequence plays once per browser session; 
   the wordmark); only its *structure* changes from grid to fine grain, and only the pointer brightens it.
   Letters have no moat or halo ring: a signed distance to the edge (texture G inside, B outside) makes each
   letter's edge a ~2-cell dithered transition, so the field runs straight up to it.
-- **Balloon letters.** Texture A holds an inflated height (quarter-circle profile over the inside distance,
-  blurred 3 × 9 texels so the spine rounds off). Its normals take a soft key light from the upper left and the
-  pointer light: low-contrast diffuse, a fresnel "sky" tone, and specular highlights that show as brighter,
-  denser cells plus a few crisp glint cells. `INFLATE` in the shader sets how puffy they look. Tones: ink
-  #060606, paper #f0efea, far dots ~0.25, cloud ~0.31, letters ~0.66 rising to 1 in the highlights.
+- **Rounded, matte letters.** The rasterised mask gets its corners rounded before any distance field is
+  computed: an opening by a 17-texel disc (≈ 4.9% of the letter height) rounds the outer corners, a closing by
+  9 texels (≈ 2.6%) the inner ones, using an exact Euclidean distance transform so the arcs are circles.
+  Texture A holds a soft inflated height (quarter-circle profile, blurred 3 × 9 texels); it only gives a
+  gentle, low-contrast tonal roll-off (tone ~0.6–0.72 of paper). No specular, no glints, no rim, no
+  highlight sweep. `INFLATE` and `ROUND_OPEN` / `ROUND_CLOSE` are the knobs. The no-WebGL SVG keeps the
+  original sharp-cornered paths. Tones: ink #060606, paper #f0efea, far dots ~0.25, cloud ~0.31.
 - **Float.** Each letter bobs, sways and tilts on its own slow, desynchronised sines (`updateFloats`), and
   lifts and leans away a little when the pointer comes near.
 - **Light.** An exponential (long, soft) falloff whose edge is bent by slow noise, breathing slightly, and
   stretched into a short tail behind its motion. It hangs on a spring (lags, swings a little past, settles).
-  It always moves the gloss on the letters; it brightens and sharpens the field only while someone is
-  pointing. With no pointer for 3 s it wanders slowly over the wordmark on two incommensurate sines.
+  It shades the letters softly; it brightens and sharpens the field only while someone is pointing. With no pointer for 3 s it wanders slowly over the wordmark on two incommensurate sines.
 - **Flips.** Every letter starts in a **random orientation** on each load (flipped horizontally, vertically,
   both, or not at all). After that a letter only changes **on hover**: moving the pointer onto it (or tapping
   it on touch screens) turns it over around its own centre, horizontally or vertically at random, like a
-  balloon: 760–980 ms, quart in-out with a small overshoot and settle, a slight lift, its normals rotating so
-  the highlight sweeps across, its edge softening while edge-on. `HORIZONTAL_BIAS` in `hero.js` sets the odds
+  balloon: 760–980 ms, quart in-out with a small overshoot and settle, a slight lift, dimming and softening
+  its edge while edge-on. `HORIZONTAL_BIAS` in `hero.js` sets the odds
   per letter — C and D look the same flipped vertically, so they lean horizontal.
 - **Links.** One bordered container, hairline-separated cells, wrapping 3×2 on phones. Hover inverts a cell.
 - **Boot** (~3.5 s, first visit per session): console lines, a counter and a progress line; as the counter

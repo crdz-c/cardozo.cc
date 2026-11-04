@@ -40,7 +40,6 @@ const LETTER_EDGES = [-1, 18.55 / 90, 36.15 / 90, 54.75 / 90, 71.15 / 90, 2]; //
 // C and D look identical flipped vertically, so they lean horizontal; R and Z are fair game
 const HORIZONTAL_BIAS = [0.8, 0.5, 0.8, 0.5, 0.8];
 const flipUniform = new Float32Array(LETTERS * 2).fill(1);
-const turnUniform = new Float32Array(LETTERS * 2);
 const flips = Array.from({ length: LETTERS }, () => ({
   mx: Math.random() < 0.5 ? 1 : -1, // random starting orientation, every load
   my: Math.random() < 0.5 ? 1 : -1,
@@ -78,8 +77,6 @@ function updateFlips(now) {
   flips.forEach((f, i) => {
     let sx = f.mx;
     let sy = f.my;
-    let tx = 0;
-    let ty = 0;
     f.lift = 0;
     if (f.flipping) {
       const t = clamp01((now - f.t0) / f.dur);
@@ -87,29 +84,20 @@ function updateFlips(now) {
       const over = 0.09 * Math.sin(Math.PI * clamp01((t - 0.5) / 0.5));
       const a = Math.PI * (easeInOutQuart(t) + over);
       const c = Math.cos(a);
-      const sn = Math.sin(a);
-      if (f.axis === "x") {
-        sx = f.mx * c;
-        tx = sn;
-      } else {
-        sy = f.my * c;
-        ty = sn;
-      }
+      if (f.axis === "x") sx = f.mx * c;
+      else sy = f.my * c;
       f.lift = Math.sin(Math.PI * t); // it rises a touch while it turns
       if (t >= 1) {
         if (f.axis === "x") f.mx *= -1;
         else f.my *= -1;
         sx = f.mx;
         sy = f.my;
-        tx = ty = 0;
         f.lift = 0;
         f.flipping = false;
       }
     }
     flipUniform[i * 2] = sx;
     flipUniform[i * 2 + 1] = sy;
-    turnUniform[i * 2] = tx;
-    turnUniform[i * 2 + 1] = ty;
   });
   if (!scene) flipSvg();
 }
@@ -181,42 +169,76 @@ const TEXELS_PER_UNIT = 22;
 const MARGIN = 110; // transparent border (texels) so the outer field fits and sampling past the edge reads 0
 const DEPTH = 55; // texels: range of the inside distance (≈ half a stroke: the balloon's full height)
 const HALO = 90; // texels: range of the outside distance
+const ROUND_OPEN = 17; // texels (≈ 4.9% of the letter height, 346 texels): radius of the outer corners
+const ROUND_CLOSE = 9; // texels (≈ 2.6%): radius of the inner corners
 const BLUR = 9; // texels: radius of each of the three box-blur passes on the balloon height
 
+// Exact Euclidean distance transform (Felzenszwalb & Huttenlocher): distance in texels from every texel
+// to the nearest texel where mask === seed (0 there). Exact circles matter: the corner rounding below is
+// an opening/closing by a disc, and a chamfer metric would round corners into octagons.
 function distanceTransform(mask, w, h, seed) {
-  // two-pass chamfer (3-4), returns thirds of a texel; 0 where mask === seed
-  const INF = 1e9;
-  const d = new Float32Array(w * h);
-  for (let i = 0; i < d.length; i++) d[i] = mask[i] === seed ? 0 : INF;
+  const INF = 1e20;
+  const n = w * h;
+  const d = new Float64Array(n);
+  for (let i = 0; i < n; i++) d[i] = mask[i] === seed ? 0 : INF;
+  const len = Math.max(w, h);
+  const f = new Float64Array(len);
+  const out = new Float64Array(len);
+  const v = new Int32Array(len);
+  const z = new Float64Array(len + 1);
+  const pass = (count) => {
+    let k = 0;
+    v[0] = 0;
+    z[0] = -INF;
+    z[1] = INF;
+    for (let q = 1; q < count; q++) {
+      let sx = (f[q] + q * q - (f[v[k]] + v[k] * v[k])) / (2 * q - 2 * v[k]);
+      while (sx <= z[k]) {
+        k--;
+        sx = (f[q] + q * q - (f[v[k]] + v[k] * v[k])) / (2 * q - 2 * v[k]);
+      }
+      k++;
+      v[k] = q;
+      z[k] = sx;
+      z[k + 1] = INF;
+    }
+    k = 0;
+    for (let q = 0; q < count; q++) {
+      while (z[k + 1] < q) k++;
+      out[q] = (q - v[k]) * (q - v[k]) + f[v[k]];
+    }
+  };
+  for (let x = 0; x < w; x++) {
+    for (let y = 0; y < h; y++) f[y] = d[y * w + x];
+    pass(h);
+    for (let y = 0; y < h; y++) d[y * w + x] = out[y];
+  }
   for (let y = 0; y < h; y++) {
-    for (let x = 0; x < w; x++) {
-      const i = y * w + x;
-      let v = d[i];
-      if (v === 0) continue;
-      if (x > 0) v = Math.min(v, d[i - 1] + 3);
-      if (y > 0) {
-        v = Math.min(v, d[i - w] + 3);
-        if (x > 0) v = Math.min(v, d[i - w - 1] + 4);
-        if (x < w - 1) v = Math.min(v, d[i - w + 1] + 4);
-      }
-      d[i] = v;
-    }
+    const row = y * w;
+    for (let x = 0; x < w; x++) f[x] = d[row + x];
+    pass(w);
+    for (let x = 0; x < w; x++) d[row + x] = out[x];
   }
-  for (let y = h - 1; y >= 0; y--) {
-    for (let x = w - 1; x >= 0; x--) {
-      const i = y * w + x;
-      let v = d[i];
-      if (v === 0) continue;
-      if (x < w - 1) v = Math.min(v, d[i + 1] + 3);
-      if (y < h - 1) {
-        v = Math.min(v, d[i + w] + 3);
-        if (x < w - 1) v = Math.min(v, d[i + w + 1] + 4);
-        if (x > 0) v = Math.min(v, d[i + w - 1] + 4);
-      }
-      d[i] = v;
-    }
-  }
-  return d;
+  const r = new Float32Array(n);
+  for (let i = 0; i < n; i++) r[i] = Math.sqrt(d[i]);
+  return r;
+}
+
+// Round every corner of a binary mask: an opening by a disc of radius rOpen rounds the convex corners
+// (Z's points, the C terminals, R's leg), a closing by rClose rounds the concave ones (R's notch, the
+// inside corners of D and Z). Stroke widths and counters wider than the discs are left as they are.
+function roundCorners(solid, w, h, rOpen, rClose) {
+  const n = w * h;
+  let m = new Uint8Array(n);
+  let dIn = distanceTransform(solid, w, h, 0);
+  for (let i = 0; i < n; i++) m[i] = dIn[i] > rOpen ? 1 : 0; // erode
+  let dOut = distanceTransform(m, w, h, 1);
+  for (let i = 0; i < n; i++) m[i] = dOut[i] <= rOpen ? 1 : 0; // dilate → opened
+  dOut = distanceTransform(m, w, h, 1);
+  for (let i = 0; i < n; i++) m[i] = dOut[i] <= rClose ? 1 : 0; // dilate
+  dIn = distanceTransform(m, w, h, 0);
+  for (let i = 0; i < n; i++) m[i] = dIn[i] > rClose ? 1 : 0; // erode → closed
+  return m;
 }
 
 // separable box blur (radius r texels), three passes of which approximate a gaussian
@@ -263,8 +285,9 @@ function buildWordmarkTexture() {
 
   const rgba = ctx.getImageData(0, 0, tw, th).data;
   const n = tw * th;
-  const solid = new Uint8Array(n);
-  for (let i = 0; i < n; i++) solid[i] = rgba[i * 4] > 127 ? 1 : 0;
+  const raw = new Uint8Array(n);
+  for (let i = 0; i < n; i++) raw[i] = rgba[i * 4] > 127 ? 1 : 0;
+  const solid = roundCorners(raw, tw, th, ROUND_OPEN, ROUND_CLOSE);
 
   const inside = distanceTransform(solid, tw, th, 0); // letter texels: distance to the nearest outside texel
   const outside = distanceTransform(solid, tw, th, 1); // outside texels: distance to the nearest letter texel
@@ -273,16 +296,16 @@ function buildWordmarkTexture() {
   // ridge along each stroke's spine rounds off and highlights become soft spots instead of lines.
   let height = new Float32Array(n);
   for (let i = 0; i < n; i++) {
-    const x = 1 - clamp01(inside[i] / 3 / DEPTH);
+    const x = 1 - clamp01(inside[i] / DEPTH);
     height[i] = solid[i] ? Math.sqrt(1 - x * x) : 0;
   }
   height = boxBlur(boxBlur(boxBlur(height, tw, th, BLUR), tw, th, BLUR), tw, th, BLUR);
 
   const data = new Uint8Array(n * 4);
   for (let i = 0; i < n; i++) {
-    data[i * 4] = rgba[i * 4];
-    data[i * 4 + 1] = Math.round(clamp01(inside[i] / 3 / DEPTH) * 255);
-    data[i * 4 + 2] = Math.round(clamp01(1 - outside[i] / 3 / HALO) * 255);
+    data[i * 4] = solid[i] * 255;
+    data[i * 4 + 1] = Math.round(clamp01(inside[i] / DEPTH) * 255);
+    data[i * 4 + 2] = Math.round(clamp01(1 - outside[i] / HALO) * 255);
     data[i * 4 + 3] = Math.round(clamp01(height[i]) * 255);
   }
   return { data, tw, th, cw, ch };
@@ -389,7 +412,7 @@ const FRAG = `
 precision highp float;
 #define DEPTH_TX ${DEPTH.toFixed(1)}
 #define HALO_TX ${HALO.toFixed(1)}
-#define INFLATE 0.6
+#define INFLATE 0.8
 
 uniform vec4  uView;      // x, y (bottom-left), w, h of the visible screen, in cells
 uniform float uTime;
@@ -401,7 +424,6 @@ uniform vec4  uLogo;      // x, y (bottom-left), w, h of the wordmark, in cells
 uniform vec2  uTexScale;  // content size / texture size
 uniform vec2  uTexOff;    // margin / texture size
 uniform vec2  uFlip[5];   // per letter: horizontal / vertical scale (-1..1, 0 = edge-on mid-flip)
-uniform vec2  uTurn[5];   // per letter: sine of the turn angle, horizontal / vertical (0 at rest)
 uniform vec3  uFloat[5];  // per letter: float offset x, y (wordmark units) and tilt (radians)
 uniform vec2  uTexSize;
 uniform vec3  uInk;
@@ -505,13 +527,6 @@ vec2 flipFor(float li) {
   // never exactly zero: the letter collapses to a hairline instead of dividing by zero
   return vec2(f.x < 0.0 ? min(f.x, -0.02) : max(f.x, 0.02), f.y < 0.0 ? min(f.y, -0.02) : max(f.y, 0.02));
 }
-vec2 turnFor(float li) {
-  vec2 f = vec2(0.0);
-  for (int i = 0; i < 5; i++) {
-    if (abs(float(i) - li) < 0.5) f = uTurn[i];
-  }
-  return f;
-}
 vec3 floatFor(float li) {
   vec3 f = vec3(0.0);
   for (int i = 0; i < 5; i++) {
@@ -567,7 +582,6 @@ void main() {
     // each letter floats on its own: offset (in wordmark units) and a small tilt, then the flip
     float li = letterIndex(q.x);
     vec2 fs = flipFor(li);
-    vec2 tn = turnFor(li);
     vec3 fl = floatFor(li);
     float cu = letterCenter(li);
     vec2 L = vec2((q.x - cu - fl.x) * aspect, q.y - 0.5 - fl.y);
@@ -597,43 +611,24 @@ void main() {
     vec2 pc = (c - (uLogo.xy + 0.5 * uLogo.zw)) / uView.w;
     float nz = vnoise(vec3(pc * 4.5, uTime * 0.07)) * 0.65 + vnoise(vec3(pc * 11.0 + 3.0, uTime * 0.11)) * 0.35;
 
-    // ---- letters as balloons: a pillowy height from the inside distance (circular profile), lit softly
+    // ---- letters: matte, softly inflated. A rounded height (texture A) gets a gentle, low-contrast
+    // tonal roll-off from a soft key light and the pointer light: no specular, no glints, no rim.
     float lum = 0.0;
     float toneL = 0.0;
     if (cov > 0.0) {
       vec2 dt = 2.5 / uTexSize;
       float hx = maskAt(tc + vec2(dt.x, 0.0)).a - maskAt(tc - vec2(dt.x, 0.0)).a;
       float hy = maskAt(tc + vec2(0.0, dt.y)).a - maskAt(tc - vec2(0.0, dt.y)).a;
-      // the height is DEPTH texels tall at its crown; INFLATE < 1 flattens it (a softer, fuller balloon)
-      vec3 n0 = normalize(vec3(-hx * sign(fs.x), -hy * sign(fs.y), 5.0 / (DEPTH_TX * INFLATE)));
-      // while a letter turns, its surface turns with it, so the highlight sweeps across
-      vec3 n = n0;
-      n = vec3(n.x * abs(fs.x) + n.z * tn.x, n.y, abs(-n.x * tn.x + n.z * abs(fs.x)));
-      n = normalize(vec3(n.x, n.y * abs(fs.y) + n.z * tn.y, abs(-n.y * tn.y + n.z * abs(fs.y))));
+      // the height is DEPTH texels tall at its crown; INFLATE < 1 flattens it
+      vec3 n = normalize(vec3(-hx * sign(fs.x), -hy * sign(fs.y), 5.0 / (DEPTH_TX * INFLATE)));
 
-      // a key light from the upper left, and the pointer light hovering above the screen
-      vec3 P = vec3(c / uView.w, 0.0);
-      vec3 Lp = normalize(vec3(uLight / uView.w, 0.55) - P);
+      vec3 Lp = normalize(vec3((uLight - c) / uView.w, 0.6));
       vec3 Lk = normalize(vec3(-0.45, 0.6, 0.66));
-      vec3 V = vec3(0.0, 0.0, 1.0);
-      float near = exp(-length(uLight - c) / uView.w * 2.2);
-      float wP = 0.35 + 0.65 * near;
-      float dif = max(dot(n, Lk), 0.0) * 0.55 + max(dot(n, Lp), 0.0) * 0.45;
-      float spec = pow(max(dot(n, normalize(Lk + V)), 0.0), 70.0) * 0.55
-                 + pow(max(dot(n, normalize(Lp + V)), 0.0), 50.0) * wP;
-      float fres = pow(1.0 - n.z, 2.0);
-      // soft env: the sky above is light, the floor below is dark
-      float env = fres * (0.55 + 0.45 * n.y);
+      float dif = dot(n, Lk) * 0.6 + dot(n, Lp) * 0.4; // ~1 on the crown, lower on the sides
 
-      float shade = 0.66 + 0.12 * (dif - 0.5) + 0.08 * env;
       float edgeOn = abs(fs.x * fs.y);
-      lum = (0.97 + 0.03 * (dif - 0.6) + 0.03 * env + 0.3 * spec - 0.04 * nz) * smoothstep(0.0, 1.0, eo * 1.1);
-      lum *= 0.82 + 0.18 * edgeOn;
-      toneL = clamp(shade + 0.34 * spec, 0.0, 1.0);
-      // a few crisp glint cells where the highlight peaks
-      float glint = step(0.78, spec) * step(th, 0.7);
-      lum = max(lum, glint);
-      toneL = mix(toneL, 1.0, glint);
+      lum = (0.97 - 0.04 * nz) * smoothstep(0.0, 1.0, eo * 1.1) * (0.82 + 0.18 * edgeOn);
+      toneL = (0.6 + 0.12 * clamp(dif, 0.0, 1.0) + 0.05 * lt) * (0.7 + 0.3 * edgeOn);
     }
     float onL = step(th, lum);
 
@@ -709,7 +704,7 @@ function createScene() {
   const U = {
     view: u("uView"), time: u("uTime"), light: u("uLight"), vel: u("uVel"), hover: u("uHover"),
     intro: u("uIntro"), logo: u("uLogo"), flip: u("uFlip[0]"), tpc: u("uTexPerCell"),
-    turn: u("uTurn[0]"), float: u("uFloat[0]"),
+    float: u("uFloat[0]"),
   };
   gl.uniform3fv(u("uInk"), INK);
   gl.uniform3fv(u("uPaper"), PAPER);
@@ -766,7 +761,6 @@ function createScene() {
     gl.uniform1f(U.hover, state.hover);
     gl.uniform1f(U.intro, state.intro);
     gl.uniform2fv(U.flip, flipUniform);
-    gl.uniform2fv(U.turn, turnUniform);
     gl.uniform3fv(U.float, floatUniform);
     gl.drawArrays(gl.TRIANGLES, 0, 3);
   }
