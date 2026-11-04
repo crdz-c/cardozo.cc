@@ -9,8 +9,9 @@
       content="Lucas Cardozo is a product designer who thinks in systems, then translates them into interfaces."
     />
     <link rel="canonical" href="https://cardozo.cc/" />
-    <meta name="theme-color" content="#000000" />
-    <meta name="color-scheme" content="dark" />
+    <meta name="theme-color" content="#000000" media="(prefers-color-scheme: dark)" />
+    <meta name="theme-color" content="#ffffff" media="(prefers-color-scheme: light)" />
+    <meta name="color-scheme" content="dark light" />
 
     <meta property="og:type" content="website" />
     <meta property="og:title" content="Lucas Cardozo — Product designer" />
@@ -24,11 +25,28 @@
     <link rel="icon" href="favicon.png" type="image/png" sizes="64x64" />
 
     <!-- Progressive enhancement: the hidden "booting" state exists only when JS runs, and a
-         failsafe lifts it, so the content can never stay invisible. -->
+         failsafe lifts it, so the content can never stay invisible. The theme is decided here, before the
+         first paint: ?theme=light|dark, else the visitor's saved choice, else the system's. -->
     <script>
       (function () {
         var h = document.documentElement;
         h.classList.add("js");
+        var t = null;
+        try {
+          t = new URLSearchParams(location.search).get("theme");
+        } catch (e) {}
+        if (t !== "light" && t !== "dark") {
+          t = null;
+          try {
+            t = localStorage.getItem("cc-theme");
+          } catch (e) {}
+        }
+        if (t !== "light" && t !== "dark") t = matchMedia("(prefers-color-scheme: light)").matches ? "light" : "dark";
+        h.setAttribute("data-theme", t);
+        document.querySelectorAll('meta[name="theme-color"]').forEach(function (m) {
+          m.removeAttribute("media");
+          m.setAttribute("content", t === "light" ? "#ffffff" : "#000000");
+        });
         var reduce = window.matchMedia && matchMedia("(prefers-reduced-motion: reduce)").matches;
         if (!reduce) {
           h.classList.add("booting");
@@ -71,6 +89,20 @@
         </svg>
       </h1>
 
+      <!-- The theme switch. With WebGL the shader draws it as dots (these SVGs are only the fallback); the
+           button itself stays for the pointer, the keyboard and screen readers. -->
+      <button class="theme" type="button" aria-label="Switch to light mode">
+        <!-- a moon in the dark theme, a sun in the light one (CSS picks) -->
+        <svg class="moon" viewBox="0 0 22 22" aria-hidden="true">
+          <path d="M18.6 14.1A8.6 8.6 0 0 1 7.9 3.4a8.6 8.6 0 1 0 10.7 10.7z" fill="currentColor" />
+        </svg>
+        <svg class="sun" viewBox="0 0 22 22" aria-hidden="true">
+          <circle cx="11" cy="11" r="4.4" fill="currentColor" />
+          <g stroke="currentColor" stroke-width="1.8" stroke-linecap="square">
+            <path d="M11 1.5v3M11 17.5v3M1.5 11h3M17.5 11h3M4.3 4.3l2.1 2.1M15.6 15.6l2.1 2.1M4.3 17.7l2.1-2.1M15.6 6.4l2.1-2.1" />
+          </g>
+        </svg>
+      </button>
     </main>
 
     <script type="module" src="hero.js"></script>
