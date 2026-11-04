@@ -26,13 +26,17 @@ const rand = (a, b) => a + Math.random() * (b - a);
 
 // ------------------------------------------------------------------ knobs (interaction, JS side)
 // Distances in wordmark heights (h). Springs: angular frequency ω (1/s) and damping ratio ζ.
-const ELECTRON_R = 22; // CSS px: radius of the electron's push
-const ELECTRON_SPRING = [34, 1]; // fast and critically damped: precise, never overshoots
-const ENTER = 0.2; // h: an electron this close to a letter's edge gets captured by it
-const MAX_PULL = 0.42; // h: how far a bubble can stretch out of its letter before it lets go or hands over
-const REARM = 1.5; // × ENTER: a released letter can capture again only after the electron got this far
+const ELECTRON_R = 32; // CSS px: radius of the electron's push
+const ELECTRON_SPRING = [34, 1]; // free: fast and critically damped, precise, never overshoots
+const ELECTRON_STUCK = [13, 1]; // stuck: it trails the pointer like something on a rubber band
+const ENTER = 0.26; // h: an electron this close to a letter's edge gets captured by it
+const MAX_PULL = 0.62; // h: how far a bubble can stretch out of its letter before it lets go or hands over
+const REARM = 1.7; // × ENTER: a released letter can capture again only after the electron got this far
 const TURN_BACK = 0.14; // h: moving this far against the capture direction is a "direction change"
-const BUBBLE_SPRING = [15, 0.55]; // the bubble's anchor: soft and a little gooey
+const BUBBLE_SPRING = [7, 0.95]; // the tendril's tip: slow, elastic, almost no bounce
+const EDGE_SPRING = [14, 1]; // where the tendril leaves the letter's edge
+const LET_GO = 4.5; // ω of the tendril retracting after a release (slow letting go)
+const AFTERGLOW = 2.8; // s: decay time of the field's stirred-up energy
 const WAVE_LIFE = 1.9; // s
 const MAX_WAVES = 4;
 
@@ -46,7 +50,9 @@ const state = {
   e: { x: -1e4, y: -1e4, vx: 0, vy: 0, tx: -1e4, ty: -1e4, on: false, str: 0, sv: 0 },
   // the sticky bubble
   stuck: -1, // letter index, or -1 when free
-  blob: { x: 0, y: 0, vx: 0, vy: 0, str: 0, sv: 0, letter: 0 },
+  blob: { x: 0, y: 0, vx: 0, vy: 0, ax: 0, ay: 0, avx: 0, avy: 0, str: 0, sv: 0, letter: 0, want: 0 },
+  energy: 0, // stirred-up energy of the field (0..1), decays over AFTERGLOW
+  stir: [0, 0], // where it was last stirred, hero CSS px
   capDir: 1,
   capExtreme: 0,
   rearm: [true, true, true, true, true],
@@ -153,7 +159,7 @@ const VBW = 90;
 const VBH = 15.75;
 const TEXELS_PER_UNIT = 22;
 const TEX_H = VBH * TEXELS_PER_UNIT; // texels per wordmark height
-const HALO = 170; // texels: range of the outside distance (must cover MAX_PULL)
+const HALO = 230; // texels: range of the outside distance (must cover MAX_PULL)
 const MARGIN = HALO + 10; // transparent border so outside distances fit and sampling past the edge reads 0
 const DEPTH = 55; // texels: range of the inside distance
 const ROUND_OPEN = 17; // texels (≈ 4.9% of the letter height): radius of the outer corners
@@ -300,8 +306,17 @@ precision highp float;
 #define TONE_L 0.97        // letter dot tone
 #define TWINKLE 0.3        // per-dot twinkle depth (letters at 35% of it)
 #define FIELD_TINT vec3(0.9, 0.94, 1.0)
-#define BLOB_R 0.09        // bubble radius, × wordmark height
-#define NECK_K 0.6         // bubble neck (smooth-union width), × wordmark height
+#define SEA_AMP 0.9        // calm-sea drift at rest, cells
+#define SEA_STIR 4.0       // extra drift near the last interaction, × energy, cells
+#define SEA_GLOBAL 1.2     // extra drift everywhere, × energy, cells
+#define SEA_SCALE 0.3      // swell size, screen heights
+#define SEA_SPEED 0.05     // swell speed
+#define SEA_RIPPLE 0.07    // ripple frequency, per cell (≈ 14-cell clusters)
+#define NECK_BASE 0.1      // tendril radius where it leaves the stroke, × wordmark height
+#define NECK_TIP 0.055     // … at its tip
+#define NECK_THIN 0.55     // how much the middle thins when fully stretched
+#define NECK_FUSE 0.12     // smooth-union width where it joins the letter, × wordmark height
+#define MAX_PULL_H ${MAX_PULL.toFixed(2)}
 #define CORE 0.32          // electron core radius, × electron radius
 #define LINE_TONE 0.5      // UI shapes (borders)
 #define AREA_QUIET 0.25    // field density under a UI element
@@ -319,7 +334,10 @@ uniform vec2  uTexScale;
 uniform vec2  uTexOff;
 uniform float uTexPerCell;
 uniform vec2  uFlip[5];
-uniform vec4  uBlob;      // bubble: x, y (device px), strength, letter index
+uniform vec4  uBlob;      // tendril tip: x, y (device px), strength, letter index
+uniform vec2  uAnchor;    // tendril base on the letter's edge, device px
+uniform vec3  uSea;       // calm-sea drift: amplitude (cells), stir x, y (device px)
+uniform float uEnergy;    // stirred-up energy 0..1 (afterglow)
 uniform vec4  uHot;       // hovered UI element, device px (x0, y0, x1, y1)
 uniform float uHotAmt;
 uniform vec4  uFocus;     // keyboard-focused UI element, device px
@@ -429,6 +447,18 @@ void main() {
   vec2 pDev = (cell + 0.5) * uCell;
   vec3 push = pushAt(pDev);
   vec2 c = (pDev - push.xy) / uCell; // where this cell samples the scene from (displaced), in cells
+
+  // calm sea: a slow, low-frequency swell of the field. Stirred-up energy (afterglow) makes it larger and
+  // livelier, most around where the interaction happened, then it settles back. The UI never drifts and
+  // the letters only a little while the energy lasts.
+  vec2 sp = c / (SEA_SCALE * uCells.y);
+  vec2 sea = vec2(vnoise(vec3(sp, uTime * SEA_SPEED)), vnoise(vec3(sp + 7.7, uTime * SEA_SPEED + 3.1))) - 0.5;
+  vec2 chop = vec2(vnoise(vec3(sp * 2.6, uTime * 0.3)), vnoise(vec3(sp * 2.6 + 4.2, uTime * 0.3 + 1.9))) - 0.5;
+  float stirW = exp(-pow(length(pDev - uSea.yz) / (0.45 * uDev.y), 2.0));
+  float stirAmp = uEnergy * (SEA_STIR * stirW + SEA_GLOBAL);
+  vec2 seaOff = uSea.x * (sea * 2.0 * (SEA_AMP + stirAmp) + chop * 2.0 * stirAmp * 0.6);
+  vec2 cs = c + seaOff;                    // the field and the cloud
+  vec2 cL = c + seaOff * 0.3 * uEnergy;    // the letters
   float rE = length(pDev - uE.xy);
   float eNear = uE.z * exp(-pow(rE / (3.0 * uER), 2.0));
   float site = 1.0 - mod(cell.x + cell.y, 2.0); // one checkerboard lattice for every dot
@@ -447,7 +477,7 @@ void main() {
     if (max(D, keepFine(c4)) > 0.44 + 0.24 * (hash2(blk + 31.7) - 0.5)) {
       sz = 1.0;
       blk = cell;
-      D = densityAt(c);
+      D = densityAt(cs);
     }
   }
 
@@ -474,7 +504,7 @@ void main() {
     tone = (0.2 + 0.12 * D) * (1.0 - TWINKLE * tw);
   } else {
     // ---- fine field: the wordmark and the cloud around it
-    vec2 q = (c - uLogo.xy) / uLogo.zw;
+    vec2 q = (cL - uLogo.xy) / uLogo.zw;
     float aspect = uLogo.z / uLogo.w;
     float li = letterIndex(q.x);
     vec2 fs = flipFor(li);
@@ -487,13 +517,23 @@ void main() {
     float sd = letterSD(li, qr, aspect);
     // the sticky bubble: the captured letter's shape, smoothly united with a blob at the electron
     if (uBlob.z > 0.001) {
+      // the sticky tendril: a tapered capsule from the edge point (uAnchor) to the tip (uBlob.xy), wide at
+      // the stroke and thinning in the middle as it stretches, smoothly fused into the captured letter.
+      // It grows out of the nearest edge, so counters stay open and strokes stay readable.
       float bs = uBlob.z;
-      float dB = length(pDev - uBlob.xy) / uCell - BLOB_R * uLogo.w * bs;
+      vec2 a = uAnchor / uCell;
+      vec2 bt = uBlob.xy / uCell;
+      vec2 pa = pDev / uCell - a;
+      vec2 ba = bt - a;
+      float hh = clamp(dot(pa, ba) / max(dot(ba, ba), 0.0001), 0.0, 1.0);
+      float stretch = clamp(length(ba) / (MAX_PULL_H * uLogo.w), 0.0, 1.0);
+      float rad = mix(NECK_BASE, NECK_TIP, hh) * uLogo.w * bs * (1.0 - NECK_THIN * stretch * sin(3.14159 * hh));
+      float dT = length(pa - ba * hh) - rad;
       float dL = -letterSD(uBlob.w, qr, aspect);
-      sd = max(sd, -smin(dL, dB, NECK_K * uLogo.w * bs));
+      sd = max(sd, -smin(dL, dT, NECK_FUSE * uLogo.w));
     }
 
-    vec2 pc = (c - (uLogo.xy + 0.5 * uLogo.zw)) / uCells.y;
+    vec2 pc = (cs - (uLogo.xy + 0.5 * uLogo.zw)) / uCells.y;
     float nz = vnoise(vec3(pc * 4.5, uTime * 0.07)) * 0.65 + vnoise(vec3(pc * 11.0 + 3.0, uTime * 0.11)) * 0.35;
     float wave = vnoise(vec3(pc * 7.0 + vec2(uTime * 0.045, -uTime * 0.02), uTime * 0.3)) - 0.5;
 
@@ -503,7 +543,10 @@ void main() {
     float soft = EDGE_SOFT * mix(1.0, EDGE_HOVER, eNear);
     float letter = smoothstep(-soft, soft, sd + rough * mix(1.0, 0.4, eNear)) * smoothstep(0.0, 1.0, eo * 1.1);
 
-    float lumC = ((0.03 + 0.1 * nz * nz) * (1.0 + 0.6 * wave) + push.z * 0.35) * smoothstep(0.0, 0.7, uIntro);
+    // ripples: clusters of ~14 cells carried by the sea, so the dots visibly gather and drift
+    float rip = vnoise(vec3(cs * SEA_RIPPLE, uTime * 0.12));
+    float ripple = mix(1.0, 0.35 + 1.3 * rip, clamp(0.6 + 0.6 * uEnergy, 0.0, 1.0));
+    float lumC = ((0.03 + 0.1 * nz * nz) * (1.0 + 0.6 * wave) * ripple + push.z * 0.35) * smoothstep(0.0, 0.7, uIntro);
     float edgeOn = abs(fs.x * fs.y);
     float lumL = (DENS_L + 0.5 * wave * DENS_WAVE + DENS_E * eNear + push.z * 0.3) * (0.55 + 0.45 * edgeOn);
     float lum = mix(lumC * 1.4 * quiet, lumL, letter);
@@ -524,10 +567,12 @@ void main() {
 
   // ---- UI shapes (borders, SVG, images) and states, as dots on the same lattice
   float hot = inRect(pDev, uHot) * uHotAmt;
-  float uiLum = (shape * (1.0 + hot * 0.6) + area * (ui.b * IMG_DENS + hot * HOT_DENS) + push.z * area * 0.3) * uUi;
+  // shapes light every lattice site along them (a clean dotted line) and carry their density as tone;
+  // areas take images and hover fills as density
+  float uiLum = (step(0.02, shape) + area * (ui.b * IMG_DENS + hot * HOT_DENS) + push.z * area * 0.3) * uUi;
   if (site * step(th, uiLum) > 0.5) {
     on = 1.0;
-    tone = mix(LINE_TONE, 0.95, max(hot, ui.b)) * (1.0 - 0.5 * TWINKLE * tw);
+    tone = mix(LINE_TONE * (0.4 + 0.6 * shape), 0.95, max(hot, ui.b)) * (1.0 - 0.5 * TWINKLE * tw);
     tint = vec3(1.0);
   }
   // keyboard focus: a dotted ring just outside the element
@@ -547,8 +592,8 @@ void main() {
 
 const COMPOSE = `
 precision highp float;
-#define TEXT_DENS 0.94     // text: share of glyph pixels lit
-#define TEXT_TONE 0.62     // text tone at rest (labels stay quiet)
+#define TEXT_DENS 0.97     // text: share of glyph pixels lit
+#define TEXT_TONE 0.86     // text tone at rest
 
 ${PUSH}
 
@@ -580,9 +625,9 @@ const elements = createElements(() => scene?.rebuildUI());
 elements.add({ id: "wordmark", kind: "wordmark", node: logoSvg, sticky: true });
 elements.add({ id: "labels", kind: "text", node: hero.querySelector(".bar"), density: 1 });
 const linksNav = hero.querySelector(".links");
-elements.add({ id: "links", kind: "box", node: linksNav, area: true, outline: true, density: 0.6 });
+elements.add({ id: "links", kind: "box", node: linksNav, area: true, outline: true, density: 0.45 });
 linksNav.querySelectorAll("a").forEach((a, i) => {
-  elements.add({ id: `link-${i}`, kind: "box", node: a, outline: true, density: 0.6, hover: true });
+  elements.add({ id: `link-${i}`, kind: "box", node: a, hover: true }); // no divider: only a hover target
   elements.add({ id: `link-${i}-text`, kind: "text", node: a, density: 1 });
 });
 
@@ -649,7 +694,7 @@ function createScene() {
 
   const locs = (p, names) => Object.fromEntries(names.map((n) => [n, gl.getUniformLocation(p, n)]));
   const common = ["uDev", "uE", "uEV", "uER", "uW[0]", "uTime", "uBlue", "uUI", "uCells", "uCell", "uUi", "uHot", "uHotAmt", "uPaper"];
-  const UF = locs(field, [...common, "uIntro", "uLogo", "uTexScale", "uTexOff", "uTexPerCell", "uFlip[0]", "uBlob", "uFocus", "uFocusAmt", "uInk", "uMask"]);
+  const UF = locs(field, [...common, "uIntro", "uLogo", "uTexScale", "uTexOff", "uTexPerCell", "uFlip[0]", "uBlob", "uAnchor", "uSea", "uEnergy", "uFocus", "uFocusAmt", "uInk", "uMask"]);
   const UC = locs(compose, [...common, "uField"]);
 
   gl.useProgram(field);
@@ -740,6 +785,8 @@ function createScene() {
   }
 
   function draw() {
+    hr = hero.getBoundingClientRect();
+    if (state.hot) state.hotRect = rectDev(state.hot.el.node.getBoundingClientRect());
     // waves → uniforms
     const now = state.time;
     for (let i = 0; i < MAX_WAVES; i++) {
@@ -763,6 +810,11 @@ function createScene() {
     const b = state.blob;
     const [bx, by] = toDev(b.x + hr.left, b.y + hr.top);
     gl.uniform4f(UF.uBlob, bx, by, b.str, b.letter);
+    const [ax, ay] = toDev(b.ax + hr.left, b.ay + hr.top);
+    gl.uniform2f(UF.uAnchor, ax, ay);
+    const [sx, sy] = toDev(state.stir[0] + hr.left, state.stir[1] + hr.top);
+    gl.uniform3f(UF.uSea, reduce ? 0 : 1, sx, sy);
+    gl.uniform1f(UF.uEnergy, state.energy);
     gl.uniform4fv(UF.uFocus, state.focusRect ? rectDev(state.focusRect) : [0, 0, 0, 0]);
     gl.uniform1f(UF.uFocusAmt, state.focusAmt);
     gl.drawArrays(gl.TRIANGLES, 0, 3);
@@ -852,25 +904,25 @@ function updateSticky(now) {
     }
   }
 
-  // the bubble's anchor: the electron, or the point MAX_PULL out of the letter toward it
+  // the tendril: it leaves letter i at the edge point nearest the electron and reaches toward the electron,
+  // at most MAX_PULL out. If the electron is inside the letter there is nothing to pull.
   const b = state.blob;
-  let tx = e.x;
-  let ty = e.y;
-  if (state.stuck >= 0) {
-    const i = state.stuck;
-    const di = d[i];
-    if (di > MAX_PULL) {
-      // step back toward the letter along the distance gradient
-      const eps = 0.02 * p.h;
-      const dx = distances(e.x + eps, e.y).d[i] - distances(e.x - eps, e.y).d[i];
-      const dy = distances(e.x, e.y + eps).d[i] - distances(e.x, e.y - eps).d[i];
-      const gl = Math.hypot(dx, dy) || 1;
-      const back = (di - MAX_PULL) * p.h;
-      tx = e.x - (dx / gl) * back;
-      ty = e.y - (dy / gl) * back;
-    }
-  }
-  return { tx, ty };
+  const i = state.stuck >= 0 ? state.stuck : b.letter;
+  const eps = 0.02 * p.h;
+  const gx = distances(e.x + eps, e.y).d[i] - distances(e.x - eps, e.y).d[i];
+  const gy = distances(e.x, e.y + eps).d[i] - distances(e.x, e.y - eps).d[i];
+  const gl = Math.hypot(gx, gy) || 1;
+  const di = d[i];
+  const ax = e.x - (gx / gl) * di * p.h;
+  const ay = e.y - (gy / gl) * di * p.h;
+  const reach = Math.min(Math.max(di, 0), MAX_PULL) * p.h;
+  b.want = state.stuck >= 0 && di > 0.03 ? 1 : 0;
+  return {
+    ax,
+    ay,
+    tx: b.want ? ax + (gx / gl) * reach : ax, // after a release the tip springs back into the edge
+    ty: b.want ? ay + (gy / gl) * reach : ay,
+  };
 }
 
 // one semi-implicit step of a damped spring: o[k] moves toward target, o[v] is its velocity.
@@ -929,6 +981,8 @@ window.addEventListener(
     const y = e.clientY - r.top;
     if (wordmarkSD && Math.min(...distances(x, y).d) < 0) return;
     state.waves.push({ x, y, t0: state.time });
+    state.energy = Math.max(state.energy, 0.85);
+    state.stir = [x, y];
     if (state.waves.length > MAX_WAVES) state.waves.shift();
   },
   { passive: true }
@@ -940,19 +994,16 @@ window.addEventListener("pointerup", electronOff, { passive: true });
 window.addEventListener("pointercancel", electronOff, { passive: true });
 html.addEventListener("pointerleave", electronOff);
 
-let hoverList = [];
 function updateHover(x, y) {
   if (!scene) return;
-  const hit = hoverList.find(({ rect: r }) => x >= r.left && x <= r.right && y >= r.top && y <= r.bottom);
+  // fresh rects every time: layout can shift without a resize (a web font swapping in, for one)
+  const hit = hoverTargets(elements.list).find(({ rect: r }) => x >= r.left && x <= r.right && y >= r.top && y <= r.bottom);
   if (hit && hit !== state.hot) state.hotRect = scene.rectDev(hit.rect);
   state.hot = hit || null;
   if (reduce) {
     state.hotAmt = hit ? 1 : 0;
     scene.draw();
   }
-}
-function refreshTargets() {
-  hoverList = hoverTargets(elements.list);
 }
 
 document.addEventListener("focusin", (e) => {
@@ -976,11 +1027,7 @@ const scene = createScene();
 if (scene) html.classList.add("gl");
 
 measureLogo();
-refreshTargets();
-new ResizeObserver(() => {
-  measureLogo();
-  refreshTargets();
-}).observe(hero);
+new ResizeObserver(measureLogo).observe(hero);
 
 let visible = true;
 new IntersectionObserver(([en]) => (visible = en.isIntersecting)).observe(hero);
@@ -997,18 +1044,37 @@ function frame(now) {
   state.time = (now - t0) / 1000;
 
   const e = state.e;
-  spring(e, "x", "vx", e.tx, ELECTRON_SPRING, dt);
-  spring(e, "y", "vy", e.ty, ELECTRON_SPRING, dt);
+  const eSpring = state.stuck >= 0 ? ELECTRON_STUCK : ELECTRON_SPRING;
+  spring(e, "x", "vx", e.tx, eSpring, dt);
+  spring(e, "y", "vy", e.ty, eSpring, dt);
   spring(e, "str", "sv", e.on ? 1 : 0, [14, 1], dt);
   e.str = clamp01(e.str);
 
   updateFlips(now);
-  const { tx, ty } = updateSticky(now) || { tx: e.x, ty: e.y };
+  const sticky = updateSticky(now);
   const b = state.blob;
-  spring(b, "x", "vx", tx, BUBBLE_SPRING, dt);
-  spring(b, "y", "vy", ty, BUBBLE_SPRING, dt);
-  spring(b, "str", "sv", state.stuck >= 0 ? 1 : 0, [state.stuck >= 0 ? 11 : 16, 1], dt);
+  if (sticky && (b.want || b.str > 0.01)) {
+    if (b.str < 0.01 && b.want) {
+      // a new tendril starts from the edge, not from wherever the last one was
+      b.x = b.ax = sticky.ax;
+      b.y = b.ay = sticky.ay;
+      b.vx = b.vy = b.avx = b.avy = 0;
+    }
+    spring(b, "ax", "avx", sticky.ax, EDGE_SPRING, dt);
+    spring(b, "ay", "avy", sticky.ay, EDGE_SPRING, dt);
+    spring(b, "x", "vx", sticky.tx, BUBBLE_SPRING, dt);
+    spring(b, "y", "vy", sticky.ty, BUBBLE_SPRING, dt);
+    if (state.stuck >= 0) b.letter = state.stuck;
+  }
+  spring(b, "str", "sv", b.want ? 1 : 0, [b.want ? 9 : LET_GO, 1], dt);
   b.str = clamp01(b.str);
+
+  // the field's energy: stirred by a moving electron, a pulled tendril and waves; it dies down slowly
+  const speed = Math.hypot(e.vx, e.vy);
+  const tip = b.str > 0.05 ? b.str * Math.min(1, Math.hypot(b.vx, b.vy) / 1200) : 0;
+  const stirNow = e.str * Math.min(1, speed / 1400) * 0.9 + tip * 0.5;
+  if (stirNow > state.energy * 0.5) state.stir = [e.x, e.y];
+  state.energy = Math.min(1, state.energy * Math.exp(-dt / AFTERGLOW) + stirNow * dt * 2.2);
 
   const k = 1 - Math.exp(-dt * 12);
   state.hotAmt += k * ((state.hot ? 1 : 0) - state.hotAmt);

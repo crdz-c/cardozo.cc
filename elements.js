@@ -41,6 +41,7 @@ function drawText(ctx, node, value) {
   ctx.fillStyle = `rgb(${value},0,0)`;
   ctx.textBaseline = "alphabetic";
   for (let t = walker.nextNode(); t; t = walker.nextNode()) {
+    if (t.parentElement.closest(".sr-only")) continue; // screen-reader-only text is never drawn
     const cs = getComputedStyle(t.parentElement);
     if (cs.display === "none" || cs.visibility === "hidden") continue;
     ctx.font = `${cs.fontStyle} ${cs.fontWeight} ${cs.fontSize} ${cs.fontFamily}`;

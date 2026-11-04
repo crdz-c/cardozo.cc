@@ -120,7 +120,19 @@ a {
   opacity: 1;
 }
 
-/* ---------------------------------------------------------------- labels */
+/* ---------------------------------------------------------------- labels and links
+   One type system for the interface: the display face, bold, uppercase, tracked, big enough to stay
+   legible when it is drawn in dots. */
+
+.bar,
+.links {
+  font-family: var(--font-display);
+  font-size: 15px;
+  font-weight: 700;
+  line-height: 1;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+}
 
 .bar {
   position: relative;
@@ -130,47 +142,31 @@ a {
   justify-content: space-between;
   gap: 24px;
   min-height: 24px;
-  font-size: 11px;
-  font-weight: 500;
-  line-height: 1;
-  letter-spacing: 0.14em;
-  text-transform: uppercase;
   color: var(--dim);
 }
 
 /* ---------------------------------------------------------------- link container
-   One bordered box holding every link. Hairlines between the cells come from a 1px gap over the
-   container's background; cells grow to fill each row, so it wraps cleanly on small screens. */
+   One quiet bordered container across the bottom of the screen, no dividers: six equal cells, evenly
+   spread (3 × 2 on phones). */
 
 .dock {
   position: relative;
   z-index: 2;
-  display: flex;
-  justify-content: center;
 }
 
 .links {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 1px;
-  width: min(100%, 780px);
-  background: var(--line-strong);
+  display: grid;
+  grid-template-columns: repeat(6, 1fr);
+  width: 100%;
   border: 1px solid var(--line-strong);
-  font-size: 11px;
-  font-weight: 500;
-  line-height: 1;
-  letter-spacing: 0.14em;
-  text-transform: uppercase;
 }
 
 .links a {
-  flex: 1 1 auto;
   display: flex;
   align-items: center;
   justify-content: center;
-  min-height: 44px;
-  padding: 0 clamp(14px, 2vw, 22px);
-  background: rgba(5, 5, 5, 0.94);
+  min-height: 52px;
+  padding: 0 8px;
   color: var(--paper);
   white-space: nowrap;
   transition: background 0.35s var(--ease), color 0.35s var(--ease);
@@ -340,9 +336,9 @@ a {
 
 @media (max-width: 699.98px) {
   .logo { width: 60vw; }
-  .bar { font-size: 10px; letter-spacing: 0.12em; }
-  .links { font-size: 10px; letter-spacing: 0.12em; }
-  .links a { min-height: 42px; padding: 0 12px; }
+  .bar, .links { font-size: 13px; letter-spacing: 0.1em; }
+  .links { grid-template-columns: repeat(3, 1fr); }
+  .links a { min-height: 50px; padding: 0 4px; }
 }
 
 /* ---------------------------------------------------------------- rendered into the dots
