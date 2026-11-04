@@ -1,0 +1,177 @@
+/* cardozo.cc — single intro page.
+   Tokens mirror the Astro rebuild (black page, white type on an opacity ramp, Kanit). */
+
+@font-face {
+  font-family: "Kanit";
+  font-style: normal;
+  font-weight: 300;
+  font-display: swap;
+  src: url("fonts/kanit-300.woff2") format("woff2");
+}
+
+@font-face {
+  font-family: "Kanit";
+  font-style: normal;
+  font-weight: 500;
+  font-display: swap;
+  src: url("fonts/kanit-500.woff2") format("woff2");
+}
+
+:root {
+  --color-bg: #000;
+  --color-fg: #fff;
+  --color-fg-subtle: rgba(255, 255, 255, 0.5);
+  --color-fg-faint: rgba(255, 255, 255, 0.25);
+  --color-hairline: rgba(255, 255, 255, 0.1);
+
+  --font-sans: "Kanit", system-ui, -apple-system, "Segoe UI", sans-serif;
+
+  --text-name: clamp(2.75rem, 8vw, 4.4375rem);
+  --text-lead: clamp(1.375rem, 3vw, 1.75rem);
+  --text-link: clamp(1.125rem, 2.2vw, 1.375rem);
+  --text-label: 0.8125rem;
+
+  --gutter: clamp(1.5rem, 10vw, 16rem);
+  --ease: cubic-bezier(0.22, 1, 0.36, 1);
+
+  color-scheme: dark;
+}
+
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+* {
+  margin: 0;
+}
+
+html {
+  -webkit-text-size-adjust: 100%;
+}
+
+body {
+  min-height: 100vh;
+  min-height: 100svh;
+  background: var(--color-bg);
+  color: var(--color-fg);
+  font-family: var(--font-sans);
+  font-weight: 300;
+  line-height: 1.4;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  text-rendering: optimizeLegibility;
+}
+
+::selection {
+  background: var(--color-fg);
+  color: var(--color-bg);
+}
+
+a {
+  color: inherit;
+  text-decoration: none;
+}
+
+:focus-visible {
+  outline: 2px solid var(--color-fg);
+  outline-offset: 4px;
+}
+
+.page {
+  min-height: 100vh;
+  min-height: 100svh;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  gap: clamp(3.5rem, 9vh, 6rem);
+  padding: 6rem var(--gutter);
+}
+
+.name {
+  font-weight: 500;
+  font-size: var(--text-name);
+  line-height: 0.95;
+  letter-spacing: -0.01em;
+  margin-bottom: clamp(1.75rem, 4vh, 2.75rem);
+}
+
+.lead {
+  font-size: var(--text-lead);
+  line-height: 1.07;
+}
+
+.lead--subtle {
+  color: var(--color-fg-subtle);
+}
+
+.label {
+  font-weight: 300;
+  font-size: var(--text-label);
+  line-height: 1.2;
+  letter-spacing: 0.2em;
+  text-transform: uppercase;
+  color: var(--color-fg-subtle);
+  margin-bottom: 1rem;
+}
+
+.contacts__list {
+  list-style: none;
+  padding: 0;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.75rem 2.5rem;
+}
+
+.link {
+  font-size: var(--text-link);
+  line-height: 1.2;
+  padding-bottom: 0.25rem;
+  border-bottom: 1px solid var(--color-hairline);
+  transition: border-color 0.4s var(--ease);
+}
+
+.link:hover,
+.link:focus-visible {
+  border-bottom-color: var(--color-fg);
+}
+
+.faint {
+  color: var(--color-fg-faint);
+}
+
+/* Gentle entrance. Runs without JS and never leaves content hidden:
+   `both` lands on the final (fully visible) state. */
+@media (prefers-reduced-motion: no-preference) {
+  .name,
+  .lead,
+  .contacts {
+    animation: rise 0.9s var(--ease) both;
+  }
+  .lead { animation-delay: 0.08s; }
+  .lead--subtle { animation-delay: 0.16s; }
+  .contacts { animation-delay: 0.28s; }
+}
+
+@keyframes rise {
+  from {
+    opacity: 0;
+    transform: translateY(24px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+@media (max-width: 699.98px) {
+  .page {
+    padding-block: 4rem;
+  }
+  .contacts__list {
+    flex-direction: column;
+    gap: 1rem;
+    align-items: flex-start;
+  }
+}
