@@ -6,8 +6,11 @@ One screen: the **CRDZC** wordmark, centred, drawn as dots in a single dithered 
 and under each letter lies the mark of its link (envelope, LinkedIn, Dribbble, Medium, GitHub). The pointer opens the
 wordmark like a curtain and reveals the marks beneath it; left alone, the letters turn into their marks on their own
 and every 9 seconds everything converges back into CRDZC. A letter's own change melts one shape into the other;
-under the pointer the dots part like oil on water. The pointer is drawn as a dot with a gradient (the system cursor is hidden); a click
-on the background sends one long, quiet ring across the screen. No build step, no dependencies (native ES modules).
+under the pointer the dots part like oil on water. The pointer is drawn as a ring of dots round a black hole, inside a soft
+gradient (the system cursor is hidden). A click on the background sends two pulses of one long wave across the screen:
+as they pass they cancel the dots' energy for a moment and show what lies behind the wordmark, then everything comes
+back. There is a light theme (true black on true white), switched from a small icon at the top right. Everything that
+appears, appears the way the loading does, only faster. No build step, no dependencies (native ES modules).
 
 ```
 index.html   the page: the wordmark as inline SVG, each letter an <a> (the real links, focus, screen readers)
@@ -26,11 +29,13 @@ Serve the folder (ES modules need http, not `file://`):
 python3 -m http.server 8000
 ```
 
-Open <http://localhost:8000>. The boot sequence plays once per browser session; add `?boot` to replay it.
+Open <http://localhost:8000>. The boot sequence plays once per browser session; add `?boot` to replay it, and
+`?theme=light` or `?theme=dark` to force a theme (not saved).
 `?debug` exposes `window.__hero`: live `state`, `letters` (each letter's morph state), `cycle()` (ms into the 9 s
 cycle or `null` while paused, the pulse, each letter's amount), `crop(x, y, w, h, zoom)` (the field as rendered, one
 pixel per cell), `tick()` (advance everything to now in 16 ms steps, for scripted checks in previews that throttle
-animation frames), `buildProgress(s)` (the loading curve) and `finish()` (skip the build).
+animation frames), `buildProgress(s)` (the loading curve) and `finish()` (skip the build); also `setTheme("light" | "dark")`
+and `theme`.
 The page loads no fonts: there is no text on screen.
 
 ## Letters are links
@@ -64,7 +69,7 @@ Keyboard focus shows that letter's mark and a dotted underline under it until fo
   `MELT_NOISE` 1.4 per letter height), so the change ripples through it; space bends gently mid-way along a slow flow
   field (`MELT_WARP` 0.06 letter heights); intensities dip and rise (`MELT_DIP` 0.35). It is continuous in time and
   space, so every display frame shows a slightly different stage. Nothing is scaled, so the outer letters cannot
-  stretch. A change takes `MORPH_MS` 1000–1400 ms (cubic in-out), shorter when it starts part-way, and can be
+  stretch. A change takes `MORPH_MS` 900–1300 ms (cubic ease-out), shorter when it starts part-way, and can be
   retargeted mid-way without a jump. The same melt carries the autonomous changes and the 9 s convergence.
 - The letters keep a random orientation (mirrored or not, per axis) as a static identity for the visit; it never
   animates. Marks are always upright.
@@ -117,14 +122,19 @@ cycle restarts from its hold 3 s after the last input, so it never jumps. A lett
   lattice (dense dots never fuse), the field is free blue noise (no grid, no repeating cluster). A letter or mark is
   only where those dots gather and burn paper-white; field dots are dimmer and cooler. A dot's intensity rises
   smoothly past its threshold (`DOT_FADE` 0.12, relative to the density) and is cut to zero below `DOT_FLOOR` 0.3.
-- **True black.** Ink is `#000000` everywhere (shader, CSS `--ink`, `theme-color`). Measured on a full-screen
-  frame read back from the field: 649 324 of 677 740 cells exactly 0, the dimmest lit dot 16/255, nothing between.
+- **True black (dark theme).** The ground is `#000000` everywhere (shader, CSS `--bg`, `theme-color`). Measured on a
+  full-screen frame read back from the field: 649 324 of 677 740 cells exactly 0, the dimmest lit dot 16/255, nothing
+  between. (Measured before the flicker below; dots now also vary in brightness, but a dot is still either lit or fully
+  off.) In the light theme the ground is `#ffffff` and dots go toward `#000000`.
+- **Every dot flickers.** On top of the slow per-dot breathing, each dot wanders between random brightnesses at its own
+  pace (0.5–2.2 changes a second, smoothly): `FLICK_C` 0.8 deep in the field, `FLICK_L` 0.4 in the letters. Measured on
+  the field: about 39 % of dots change brightness by more than a quarter within half a second.
 - **Calm sea and afterglow.** A slow swell displaces the field (0.9 cells) with ~14-cell ripples, per-dot twinkle and
   a slow brightness wave. Pointer motion and waves stir up an energy (0..1) that enlarges the swell where it happened
   and decays over `AFTERGLOW` 2.8 s.
 - **The pointer.** On fine pointers (`(hover: hover) and (pointer: fine)`) the system cursor is hidden while the live
   field runs (`cursor: none` on the page and the letter links; never in the no-WebGL or reduced-motion versions, never
-  on touch). The pointer is a dot with a gradient: a precise nucleus (`NUCLEUS_R` 4 CSS px) drawn exactly on the
+  on touch). The pointer is a ring of dots round a black hole inside a gradient: a precise nucleus (`NUCLEUS_R` 5 CSS px, its hole `HOLE` 0.5 of that, so the hotspot reads as a black point in a ring) drawn exactly on the
   hotspot, every frame, with no smoothing, set off by a thin dark moat (`MOAT` 1.5 × its radius) so it stays legible
   over bright letters and marks; around it a soft round gradient of the same dots, dense and bright at the centre and
   thinning outward (`GRAD_R` 0.6 × `POINTER_R` 32 px, `GRAD_D` 0.95), breathing slowly (`BREATHE` 3 %). The gradient's
@@ -137,11 +147,41 @@ cycle restarts from its hold 3 s after the last input, so it never jumps. A lett
   deflection, wake and energy respond to at most `MAX_SPEED` 2400 px/s.
 - **Frame pacing.** Every display frame on desktop (60/90/120/144 Hz; all motion is time-based); ~30 fps on touch
   devices. Nothing is allocated per frame.
-- **Waves.** A click or tap on the background (a click on a letter opens its link instead) sends one long, quiet
-  ring through everything: speed 1.05 screen heights/s (past the farthest corner in about 2 s), life 2.6 s with a
-  linear decay and a 0.2 s fade-in, half-width 0.1 screen heights, push 0.008 screen heights (`WAVE_PUSH`), density
-  and brightness swell 0.4 (`WAVE_DENS`). No echo ring. Up to 6 overlap; none under reduced motion.
+- **Waves.** A click or tap on the background (a click on a letter opens its link instead) sends **two pulses**
+  (`WAVE_PULSES` 2, `WAVE_PULSE_GAP` 0.2 s apart, the second `WAVE_PULSE_DECAY` 0.15 weaker), each one long ring
+  through everything: speed 1.05 screen heights/s, life 3.2 s with a linear decay and a 0.2 s fade-in, half-width 0.1
+  screen heights, push 0.008 screen heights (`WAVE_PUSH`), density and brightness swell 0.4 (`WAVE_DENS`). Up to 8
+  rings overlap (four clicks); none under reduced motion. **The pulses also cancel the dots' energy and reveal what
+  lies behind the wordmark.** Measured behind each front (in screen heights): a band at `WNULL_AT` 0.07 (`WNULL_W`
+  0.05) where the dots' energy is cut by `WNULL` 0.9, then the reveal rises over `WREV_LEAD` 0.1, holds until
+  `WREV_HOLD` 0.36 and comes back over `WREV_TAIL` 0.5, with the field thinned by `WREV_THIN` 0.65 meanwhile. The
+  reveal is the curtain's: just another source for the curtain's openness, so each site switches letter → mark at its
+  own moment on the way in and on the way out (the same blue-noise-rank switching, `MORPH_*`). The second pulse runs
+  its energy-cancelling band through the marks the first one revealed, and holds them a little longer: a click 400
+  px away shows the marks about half a second after it arrives, for roughly 0.6 s, and the letters re-form behind.
 - **Size.** The wordmark is 39 vw wide (60 vw under 700 px), fixed in the exact centre.
+
+## How things appear
+
+Everything that comes into the interface does so the way the loading does, only faster: one number runs 0 → 1 with an
+ease-out (quick first, a soft landing), and in the shader every dot has its own moment (its blue-noise rank) at which
+that number reaches it, so most dots light almost at once and a few come late, each flashing as it lands. Used by the
+theme switch's icon (`ICON_IN_MS` 700), the pointer's gradient and ring when the pointer appears, the keyboard-focus
+underline, the curtain and the waves' reveal. A letter ⇄ mark change is eased out too (`MORPH_MS` 900–1300; it used to
+be in-out). The theme change is the one exception: it is a wide, soft wave, not a dither (see below).
+
+## Theme
+
+Dark (true black ground, paper dots `#f0efea`) and light (true white `#fff` ground, true black `#000` dots: the exact
+inverse). The first paint already has the right one: an inline script in `index.html` sets `<html data-theme>` from
+`?theme=`, else the saved choice (`localStorage` `cc-theme`), else the system's `prefers-color-scheme` (which it keeps
+following until the visitor chooses). A switch at the top right (a 44 px `<button>`, `aria-label` "Switch to light
+mode" / "Switch to dark mode"; the shader draws it in dots as a half-filled ring, the filled half flipping with the
+theme; hover or focus lights it) toggles it. Both palettes live in the shader. The change is a **soft wave** sweeping
+out from the switch: each cell fades from one palette to the other over `THEME_SOFT` 0.4 of the sweep, the order being
+82 % distance from the switch and 18 % blue noise (`THEME_GRAIN`), the whole run `THEME_MS` 1400 on an ease in-out, so
+it reads as a gradient crossing the screen, not as flicker. CSS vars `--bg` / `--fg`, `theme-color` and `color-scheme`
+follow when it ends. Under reduced motion it switches at once.
 
 ## Loading: the letters fill with dots
 
@@ -175,7 +215,7 @@ from v, to v, shape]` with v a share of the top rate and shape linear, a decay t
 ## Fallbacks
 
 - **No JS:** the SVG wordmark, each letter a working link.
-- **No WebGL:** the same SVG links, system cursor kept. Letters keep their random orientation and run the same 9 s
+- **No WebGL:** the same SVG links, system cursor kept, the theme switch as a plain SVG icon. Letters keep their random orientation and run the same 9 s
   cycle; hovering a letter shows its mark. A change is a simple cross-dissolve between the SVG letter and the SVG mark
   (opacity only, single-tone marks).
 - **`prefers-reduced-motion`:** one still frame in dots, system cursor kept: no build-up, no morphs, no curtain, no
@@ -198,13 +238,16 @@ Shader (`FIELD` / `PUSH` in `hero.js`): `DENS_L` 0.72 · `DENS_WAVE` 0.25 · `DE
 `FLASH` 0.06 · `DOT_FADE` 0.12 · `DOT_FLOOR` 0.3 · `TONE_L` 0.97 · `TWINKLE` 0.3 · `FIELD_TINT` · `SEA_AMP` 0.9 ·
 `SEA_STIR` 4.0 · `SEA_GLOBAL` 1.2 · `SEA_SCALE` 0.3 · `SEA_SPEED` 0.05 · `SEA_RIPPLE` 0.07 · `GRAD_R` 0.6 · `GRAD_D`
 0.95 · `MOAT` 1.5 · `PUSH_AMT` 0.6 · `DEFLECT` 0.35 · `RING` 0.75 · `THIN` 0.6 · `WAKE` 0.5 · `STRETCH` 0.1 ·
-`BREATHE` 0.03 · `WAVE_SPEED` 1.05 · `WAVE_WIDTH` 0.1 · `WAVE_PUSH` 0.008 · `WAVE_DENS` 0.4.
-JS (top of `hero.js`): `POINTER_R` 32 px · `NUCLEUS_R` 4 px · `POINTER_SPRING` [30, 1] · `POINTER_LAG` 0.3 ·
+`BREATHE` 0.03 · `WAVE_SPEED` 1.05 · `WAVE_WIDTH` 0.1 · `WAVE_PUSH` 0.008 · `WAVE_DENS` 0.4 · `HOLE` 0.5 · `FLICK_C` 0.8 · `FLICK_L` 0.4 ·
+`WREV_LEAD` 0.1 · `WREV_HOLD` 0.36 · `WREV_TAIL` 0.5 · `WREV_THIN` 0.65 · `WNULL_AT` 0.07 · `WNULL_W` 0.05 · `WNULL` 0.9 · `THEME_SOFT` 0.4 ·
+`THEME_GRAIN` 0.18 · `LIGHT_SOFT` 0.08 · `LIGHT_OVER` 1.25 · `LIGHT_FLASH` 0.3 · `BG_D` / `FG_D` / `BG_L` / `FG_L` (the two palettes).
+JS (top of `hero.js`): `POINTER_R` 32 px · `NUCLEUS_R` 5 px · `POINTER_SPRING` [30, 1] · `POINTER_LAG` 0.3 ·
 `AFTERGLOW` 2.8 s · `MAX_SPEED` 2400 px/s · `CURTAIN_R` 0.85 · `CURTAIN_SPRING` [16, 1] · `REPEL_OPEN` [7, 0.8] · `REPEL_CLOSE` [3.2, 1] · `CURTAIN_OPEN` 10/s ·
-`CURTAIN_CLOSE` 3/s · `IDLE_MS` 3000 · `MORPH_MS` 1000–1400 · `CYCLE_MS` 9000 · `SOLO_AT` 700–3600 · `SOLO_BACK` 0.5 ·
+`CURTAIN_CLOSE` 3/s · `IDLE_MS` 3000 · `MORPH_MS` 900–1300 · `CYCLE_MS` 9000 · `SOLO_AT` 700–3600 · `SOLO_BACK` 0.5 ·
 `SOLO_BACK_AFTER` 1700–2600 · `CONVERGE_AT` 6200 · `CONVERGE_STAGGER` 500 · `PULSE_AT` 6000 · `PULSE_MS` 3600 ·
-`WAVE_LIFE` 2.6 s · `MAX_WAVES` 6 · `BUILD_RATE` (above) · `BUILD_S` 8 s · `BUILD_QUICK` 2.8 s · `CURTAIN_FROM` 0.5 · `BRAND_H` 9.5
-units · `BRAND_ROUND` [4, 3] texels · `ROUND_OPEN` / `ROUND_CLOSE` 17 / 9 texels. Ink `#000000`, paper `#f0efea`.
+`WAVE_LIFE` 3.2 s · `WAVE_PULSES` 2 · `WAVE_PULSE_GAP` 0.2 s · `WAVE_PULSE_DECAY` 0.15 · `MAX_WAVES` 8 · `ICON_R` 10 px · `ICON_IN_MS` 700 ·
+`THEME_MS` 1400 · `BUILD_RATE` (above) · `BUILD_S` 8 s · `BUILD_QUICK` 2.8 s · `CURTAIN_FROM` 0.5 · `BRAND_H` 9.5
+units · `BRAND_ROUND` [4, 3] texels · `ROUND_OPEN` / `ROUND_CLOSE` 17 / 9 texels. Dark: ground `#000000`, dots `#f0efea`; light: ground `#ffffff`, dots `#000000`.
 
 Visual direction is inspired by christendijoux.com; the shader, motion and code here are original.
 

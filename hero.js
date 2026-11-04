@@ -2,8 +2,11 @@
 // is a link, and under each letter lies the brand mark of its link: the pointer opens the wordmark like a curtain
 // and reveals the marks beneath it; left alone, the letters turn into their marks on their own and every 9 s it all
 // converges back into CRDZC. A letter's own change melts one shape into the other.
-// The pointer itself is drawn as a dot with a soft gradient of dots (the system cursor is hidden); a click on the
-// background sends one long, quiet ring across the screen; loading is the wordmark accumulating dot by dot, at
+// The pointer itself is drawn as a ring of dots around a black hole, inside a soft gradient of dots (the system cursor
+// is hidden); a click on the background sends two pulses of one long wave across the screen that, as they pass, cancel
+// the dots' energy for a moment and show what lies behind the wordmark; there is a light theme (true black & white),
+// switched from the top. Everything that appears does so the way the loading does, only faster: every dot lights at
+// its own moment, quick first, the last ones late, easing out. Loading is the wordmark accumulating dot by dot, at
 // random, in bursts. No dependencies. Everything degrades: no JS → the SVG letters as links; no WebGL → the same SVG,
 // cross-dissolving between letter and mark; prefers-reduced-motion → one still frame (still in dots).
 
@@ -18,18 +21,18 @@ const logoSvg = hero.querySelector(".logo svg");
 const reduce = matchMedia("(prefers-reduced-motion: reduce)").matches;
 const coarse = matchMedia("(hover: none)").matches;
 
-const INK = [0, 0, 0]; // true black: OLED pixels switch off between dots
-const PAPER = [240 / 255, 239 / 255, 234 / 255];
+// (the two palettes live in the shader: true black + paper for dark, true white + true black for light)
 
 const clamp = (v, lo, hi) => Math.min(hi, Math.max(lo, v));
 const clamp01 = (v) => clamp(v, 0, 1);
-const easeInOutCubic = (t) => (t < 0.5 ? 4 * t * t * t : 1 - Math.pow(-2 * t + 2, 3) / 2);
+const easeOutCubic = (t) => 1 - Math.pow(1 - t, 3);
+const easeInOutSine = (t) => 0.5 - 0.5 * Math.cos(Math.PI * t);
 const rand = (a, b) => a + Math.random() * (b - a);
 
 // ------------------------------------------------------------------ knobs (interaction, JS side)
 // Springs: angular frequency ω (1/s) and damping ratio ζ (1 = critically damped).
 const POINTER_R = 32; // CSS px: radius of the pointer's push on the field (its gradient is GRAD_R × this)
-const NUCLEUS_R = 4; // CSS px: the nucleus, drawn exactly on the pointer's hotspot
+const NUCLEUS_R = 5; // CSS px: the nucleus (a ring of dots round a black hole), drawn exactly on the pointer's hotspot
 const POINTER_SPRING = [30, 1]; // the gradient's centre follows the nucleus on this spring…
 const POINTER_LAG = 0.3; // …but never trails it by more than this, × POINTER_R
 const AFTERGLOW = 2.8; // s: decay time of the field's stirred-up energy
@@ -41,7 +44,7 @@ const CURTAIN_CLOSE = 3; // …and closes again (a soft delay as the letters re-
 const REPEL_OPEN = [7, 0.8]; // the repel (oil on water) opens on this spring (ω, ζ: a touch of overshoot)…
 const REPEL_CLOSE = [3.2, 1]; // …and flows back on this slower one
 const IDLE_MS = 3000; // ms without pointer input before the stand-alone choreography resumes
-const MORPH_MS = [1000, 1400]; // ms per change (letter ⇄ mark), scaled down for a partial one
+const MORPH_MS = [900, 1300]; // ms per change (letter ⇄ mark, eased out), scaled down for a partial one
 // the stand-alone cycle (ms from the cycle's start): hold → individual morphs → convergence → hold
 const CYCLE_MS = 9000;
 const SOLO_AT = [700, 3600]; // each letter turns into its mark at a random moment in here…
@@ -51,8 +54,11 @@ const CONVERGE_AT = 6200; // everything still showing a mark morphs back, stagge
 const CONVERGE_STAGGER = 500; // …this (so it is all letters again by ~8.4 s)
 const PULSE_AT = 6000; // the convergence pulse (letters brighten, the field thins and gathers)…
 const PULSE_MS = 3600; // …lasts this long (peaks at ~7.8 s, fades through the hold into the next cycle)
-const WAVE_LIFE = 2.6; // s: a wave's whole life (it passes the farthest corner, then fades)
-const MAX_WAVES = 6;
+const WAVE_LIFE = 3.2; // s: a wave's whole life (it passes the farthest corner, then fades)
+const WAVE_PULSES = 2; // a click sends this many pulses…
+const WAVE_PULSE_GAP = 0.2; // …this many seconds apart (each a full ring; the next one runs through the revealed marks)…
+const WAVE_PULSE_DECAY = 0.15; // …each this much weaker than the one before
+const MAX_WAVES = 8; // (4 clicks' worth overlap)
 // Loading: how fast the dots land over the build (Lucas's sketch), as segments on the normalised timeline:
 // [from t, to t, from v, to v, shape], v as a share of the top rate. Shapes: 0 linear, k > 0 a decay that is fast
 // first and flattens (1 − e^(−k·u)), -1 an abrupt jump (smoothstep, a few frames). The fill is the integral of v,
@@ -68,6 +74,11 @@ const BUILD_RATE = [
   [0.777, 0.992, 0.95, 0.51, 0.6], // …and a slow, nearly linear decay to ~51 %
   [0.992, 1, 0.51, 0.51, 0], // the last dots land and it stops
 ];
+// The theme switch (top right): its icon lights in once the build is over; a change sweeps out from it, softly.
+const ICON_R = 10; // CSS px: radius of the theme switch's icon
+const ICON_IN_MS = 700;
+const THEME_MS = 1400; // the theme change sweeps out from the switch in this long (ease in-out, every cell fading softly)
+const THEME_COLOR = { dark: "#000000", light: "#ffffff" };
 const BUILD_S = 8; // s: the whole build on a first visit (or ?boot)
 const BUILD_QUICK = 2.8; // s: the whole build for a returning visitor in this session
 const CURTAIN_FROM = 0.5; // the curtain works once the build is this far along
@@ -90,6 +101,8 @@ const state = {
   focusRect: null,
   focusAmt: 0,
   waves: [], // { x, y, t0 } in hero CSS px, seconds
+  nuc: 0, // the pointer ring's presence 0..1 (its dots light in at random, see the shader)
+  tog: { amt: 0, from: 0, to: 0, t0: 0, dur: 0, hot: 0, hover: false, focus: false }, // the theme switch's icon: how lit, how hovered
 };
 
 // ------------------------------------------------------------------ letters: links with a mark beneath
@@ -133,7 +146,7 @@ let ready = false; // the build is over: the choreography may run
 function amtAt(L, now) {
   if (!L.dur) return L.to;
   const t = clamp01((now - L.t0) / L.dur);
-  return L.from + (L.to - L.from) * easeInOutCubic(t);
+  return L.from + (L.to - L.from) * easeOutCubic(t); // fast first, a soft landing
 }
 
 // start a morph of letter i toward `to` (0 letter, 1 mark) from wherever it is now
@@ -271,6 +284,127 @@ links.forEach((a, i) => {
       scene?.draw();
     }
   });
+});
+
+// ------------------------------------------------------------------ the dots' way of appearing
+// Everything that comes into the interface lights the way the loading does, only faster: a number runs 0 → 1 with
+// an ease-out (quick first, a soft landing), and in the shader every dot has its own moment (its blue-noise rank) at
+// which that number reaches it, so most light almost at once and a few come late.
+function tweenTo(o, to, ms, now) {
+  o.from = o.amt;
+  o.to = to;
+  o.t0 = now;
+  o.dur = reduce ? 0 : ms;
+  if (!o.dur) o.amt = to;
+}
+function stepTween(o, now) {
+  if (!o.dur) return;
+  const t = clamp01((now - o.t0) / o.dur);
+  o.amt = o.from + (o.to - o.from) * easeOutCubic(t);
+  if (t >= 1) {
+    o.amt = o.to;
+    o.dur = 0;
+  }
+}
+
+const themeBtn = hero.querySelector(".theme");
+
+// ------------------------------------------------------------------ theme
+// Dark (true black) and light (paper). The first paint already has the right one (index.html). Switching sweeps
+// out from the switch: every cell crosses between the two palettes at its own moment, easing out (see the shader).
+const theme = {
+  mode: html.getAttribute("data-theme") === "light" ? "light" : "dark",
+  amt: 0, from: 0, to: 0, t0: 0, dur: 0,
+  dir: 1, // +1 towards light, -1 towards dark
+  ox: 0, oy: 0, // where the change sweeps from, hero CSS px
+};
+theme.amt = theme.from = theme.to = theme.mode === "light" ? 1 : 0;
+const domTheme = (mode) => {
+  html.setAttribute("data-theme", mode);
+  document.querySelectorAll('meta[name="theme-color"]').forEach((m) => {
+    m.removeAttribute("media");
+    m.setAttribute("content", THEME_COLOR[mode]);
+  });
+};
+function setTheme(mode, store = true) {
+  if (mode === theme.mode) return;
+  const hr = hero.getBoundingClientRect();
+  const tr = themeBtn.getBoundingClientRect();
+  theme.ox = tr.left + tr.width / 2 - hr.left;
+  theme.oy = tr.top + tr.height / 2 - hr.top;
+  theme.mode = mode;
+  theme.from = theme.amt;
+  theme.to = mode === "light" ? 1 : 0;
+  theme.dir = theme.to > theme.from ? 1 : -1;
+  theme.t0 = performance.now();
+  theme.dur = !scene || reduce ? 0 : THEME_MS * Math.max(0.4, Math.abs(theme.to - theme.from));
+  themeBtn.setAttribute("aria-label", mode === "light" ? "Switch to dark mode" : "Switch to light mode");
+  if (!theme.dur) {
+    theme.amt = theme.to;
+    domTheme(mode);
+    scene?.draw();
+  }
+  if (store) {
+    try {
+      localStorage.setItem("cc-theme", mode);
+    } catch {
+      /* storage unavailable: the choice just lasts for this visit */
+    }
+  }
+}
+function stepTheme(now) {
+  if (!theme.dur) return;
+  const t = clamp01((now - theme.t0) / theme.dur);
+  theme.amt = theme.from + (theme.to - theme.from) * easeInOutSine(t);
+  if (t >= 1) {
+    theme.amt = theme.to;
+    theme.dur = 0;
+    domTheme(theme.mode);
+  }
+}
+themeBtn.setAttribute("aria-label", theme.mode === "light" ? "Switch to dark mode" : "Switch to light mode");
+themeBtn.addEventListener("click", () => setTheme(theme.mode === "dark" ? "light" : "dark"));
+matchMedia("(prefers-color-scheme: light)").addEventListener("change", (e) => {
+  let saved = null;
+  try {
+    saved = localStorage.getItem("cc-theme");
+  } catch {
+    /* ignore */
+  }
+  if (!saved) setTheme(e.matches ? "light" : "dark", false); // follow the system until the visitor chooses
+});
+themeBtn.addEventListener("pointerenter", (e) => {
+  if (e.pointerType === "touch") return;
+  state.link = true;
+  state.tog.hover = true;
+});
+themeBtn.addEventListener("pointerleave", (e) => {
+  if (e.pointerType === "touch") return;
+  state.link = false;
+  state.tog.hover = false;
+});
+themeBtn.addEventListener("focus", () => {
+  if (!themeBtn.matches(":focus-visible")) return;
+  state.tog.focus = true;
+  const r = themeBtn.getBoundingClientRect();
+  const cx = r.left + r.width / 2;
+  const cy = r.top + r.height / 2;
+  state.focusRect = { left: cx - ICON_R, right: cx + ICON_R, top: cy - ICON_R, bottom: cy + ICON_R };
+  if (reduce) {
+    state.focusAmt = 1;
+    state.tog.hot = 1;
+    scene?.draw();
+  }
+});
+themeBtn.addEventListener("blur", () => {
+  if (!state.tog.focus) return;
+  state.tog.focus = false;
+  state.focusRect = null;
+  if (reduce) {
+    state.focusAmt = 0;
+    state.tog.hot = 0;
+    scene?.draw();
+  }
 });
 
 // ------------------------------------------------------------------ wordmark texture
@@ -421,7 +555,7 @@ uniform vec2  uDev;       // canvas size, device px
 uniform vec3  uE;         // the pointer's gradient centre: x, y (device px), presence 0..1
 uniform vec2  uEV;        // its velocity, device px / s
 uniform float uER;        // its push radius, device px (already tightened over a link)
-uniform vec4  uW[6];      // waves: x, y (device px), age (s, < 0 = off), amplitude
+uniform vec4  uW[${MAX_WAVES}];      // waves: x, y (device px), age (s, < 0 = off), amplitude
 uniform float uTime;
 uniform sampler2D uBlue;
 
@@ -468,7 +602,7 @@ vec3 pushAt(vec2 p) {
     vec2 tail = uE.xy - uEV * 0.07;
     o.z += uE.z * WAKE * fast * exp(-dot(p - tail, p - tail) / (R * R * 1.4));
   }
-  for (int i = 0; i < 6; i++) {
+  for (int i = 0; i < ${MAX_WAVES}; i++) {
     vec4 w = uW[i];
     if (w.z < 0.0) continue;
     vec2 dw = p - w.xy;
@@ -532,6 +666,25 @@ precision highp float;
 #define GRAD_R 0.6         // the pointer's gradient: radius (gaussian, × the push radius)…
 #define GRAD_D 0.95        // …and its density at the centre (brighter and tighter over a letter-link)
 #define MOAT 1.5           // a thin dark moat around the nucleus, out to this × its radius
+#define HOLE 0.5           // …and the nucleus is a ring: its black hole is this × the nucleus radius
+#define FLICK_C 0.8        // every dot wanders between random brightnesses at its own pace: how deep (the field)…
+#define FLICK_L 0.4        // …(the letters)
+#define WREV_LEAD 0.1      // the wave's passage reveals what lies beneath: it rises over this behind the front…
+#define WREV_HOLD 0.36     // …holds until here (screen heights behind the front)…
+#define WREV_TAIL 0.5      // …and comes back over this
+#define WREV_THIN 0.65     // the field thins this much while the wave is behind it
+#define WNULL_AT 0.07      // right behind the front the dots' energy is cancelled: where…
+#define WNULL_W 0.05       // …how wide…
+#define WNULL 0.9          // …how deep
+#define LIGHT_SOFT 0.08    // an icon dot's light-up: softness of its arrival…
+#define LIGHT_OVER 1.25    // …overshoot of the progress, so every dot has arrived by the end…
+#define LIGHT_FLASH 0.3    // …and how long an arriving dot flashes (of the progress)
+#define THEME_SOFT 0.4     // the theme change: each cell fades over this much of the sweep (soft, not a dither)
+#define THEME_GRAIN 0.18   // …how much of the sweep's order is blue noise rather than distance from the switch
+#define BG_D vec3(0.0)                       // dark: true black…
+#define FG_D vec3(0.9412, 0.9373, 0.9176)    // …and paper #f0efea
+#define BG_L vec3(1.0)                       // light: true white…
+#define FG_L vec3(0.0)                       // …and true black
 
 ${PUSH}
 
@@ -553,9 +706,12 @@ uniform vec3  uSea;       // calm-sea drift: amplitude (cells), stir x, y (devic
 uniform float uEnergy;    // stirred-up energy 0..1 (afterglow)
 uniform vec4  uFocus;     // keyboard-focused letter, device px
 uniform float uFocusAmt;
-uniform vec3  uInk;
-uniform vec3  uPaper;
 uniform sampler2D uMask;
+uniform vec4  uTog;       // the theme switch's icon: centre x, y, radius (cells), lit 0..1
+uniform float uTogHot;    // …hovered / focused 0..1
+uniform float uTheme;     // 0 dark … 1 light (eased in JS; each cell crosses at its own moment)
+uniform float uThemeDir;  // +1 going to light, -1 going to dark
+uniform vec3  uThemeO;    // where the change sweeps out from: x, y (device px), and the farthest corner's distance
 
 float hash3(vec3 p) { return fract(sin(dot(p, vec3(127.1, 311.7, 74.7))) * 43758.5453123); }
 float vnoise(vec3 x) {
@@ -628,6 +784,22 @@ vec2 letterSD(float li, vec2 q, float aspect, vec2 m, float brand) {
   return vec2((t.r > 0.5 ? t.g * DEPTH_TX : -(1.0 - t.b) * HALO_TX) / uTexPerCell - extra, t.a);
 }
 
+// the wave's passage (see pushAt): behind its front, for a moment, what lies beneath the wordmark shows; then it all
+// comes back. x = the reveal 0..1. y = the band right behind the front where the dots' energy is cancelled.
+vec2 waveAt(vec2 p) {
+  vec2 o = vec2(0.0);
+  for (int i = 0; i < ${MAX_WAVES}; i++) {
+    vec4 w = uW[i];
+    if (w.z < 0.0) continue;
+    float dn = (w.z * WAVE_SPEED * uDev.y - length(p - w.xy)) / uDev.y;
+    float amp = smoothstep(0.0, 0.3, w.w);
+    float rev = smoothstep(0.0, WREV_LEAD, dn) * (1.0 - smoothstep(WREV_HOLD, WREV_HOLD + WREV_TAIL, dn)) * amp;
+    float nul = exp(-pow((dn - WNULL_AT) / WNULL_W, 2.0)) * amp;
+    o = max(o, vec2(rev, nul));
+  }
+  return o;
+}
+
 void main() {
   vec2 cell = floor(gl_FragCoord.xy);
   vec2 pDev = (cell + 0.5) * uCell;
@@ -652,12 +824,20 @@ void main() {
   float h = fract(sin(dot(cell, vec2(12.9898, 78.233))) * 43758.5453);
   // every dot has its own slow phase: it breathes in and out rather than popping
   float tw = 0.5 + 0.5 * sin(uTime * (0.45 + 1.1 * h) + h * 60.0);
+  // …and wanders between random brightnesses at its own pace (0.5–2.2 changes a second), smoothly
+  float fr = uTime * (0.5 + 1.7 * fract(h * 91.7 + 0.37)) + h * 97.0;
+  float fk = fract(fr);
+  fk = fk * fk * (3.0 - 2.0 * fk);
+  float flick = mix(hash3(vec3(cell, floor(fr))), hash3(vec3(cell, floor(fr) + 1.0)), fk);
 
   // ---- the curtain: a soft disc around the pointer (on a spring, in JS), its edge feathered and gently wobbling
   vec2 rv = pDev - uRev.xy;
   float wob = vnoise(vec3(rv / max(uRev.z, 1.0) * 1.6, uTime * 0.35)) - 0.5;
   float edge = uRev.z * (1.0 + 2.0 * CURTAIN_WOBBLE * wob);
   float curtain = uRev.w * (1.0 - smoothstep(edge * (1.0 - CURTAIN_FEATHER), edge * (1.0 + CURTAIN_FEATHER), length(rv)));
+  // the wave's passage reveals the same way: each site switches at its own moment as the reveal rises and falls
+  vec2 wv = waveAt(pDev);
+  curtain = max(curtain, wv.x);
 
   // ---- oil on water: around the curtain's centre the surface film of dots (the letters and the field) is pushed
   // radially outward along smooth flow lines, leaving a clean opening where the mark beneath reads clearly. Material
@@ -742,22 +922,49 @@ void main() {
     letter *= arr;
   }
 
+  // ---- the theme switch's icon (top right): more of the same material, drawn from cell positions that only the
+  // pointer and the waves displace (the curtain's film does not carry it). Its dots light like the loading, only
+  // faster; it sits quieter until hovered. A half-filled ring, the filled half flipping with the theme.
+  float ex = 0.0;
+  float exTone = 1.0;
+  float exFlash = 0.0;
+  if (uTog.w > 0.002) {
+    vec2 tp = c - uTog.xy;
+    float R = uTog.z;
+    float d = length(tp);
+    float side = tp.x * (uTheme > 0.5 ? -1.0 : 1.0);
+    float cov = max(step(d, R) * step(R - 2.6, d), step(d, R - 4.2) * step(side, 0.0));
+    float a = uTog.w * LIGHT_OVER - LIGHT_SOFT;
+    float ic = cov * smoothstep(th2 - LIGHT_SOFT, th2 + LIGHT_SOFT, a);
+    ex = ic;
+    exTone = 0.85 + 0.15 * uTogHot;
+    exFlash = cov * ic * exp(-max(a - th2, 0.0) / LIGHT_FLASH) * (1.0 - smoothstep(0.8, 1.0, uTog.w));
+  }
+  if (ex > letter) {
+    letter = ex;
+    ftone = exTone;
+  }
+  flash = max(flash, exFlash);
+
   // ---- density and tone. One material: letters are where the same dots gather and burn brighter.
   float rip = vnoise(vec3(cs * SEA_RIPPLE, uTime * 0.12));
   float ripple = mix(1.0, 0.35 + 1.3 * rip, clamp(0.6 + 0.6 * uEnergy, 0.0, 1.0));
   float D = densityAt(cs);
   float lumC = (0.018 + 0.05 * D) * (0.45 + nz) * (1.0 + 0.6 * wave) * ripple * (1.0 - PULSE_THIN * uPulse) * film * rim
+    * (1.0 - WREV_THIN * wv.x) * (1.0 - WNULL * wv.y)
     + push.z * 0.3 * (0.6 + 0.4 * tw);
   float lumL = (DENS_L + 0.5 * wave * DENS_WAVE + DENS_E * eNear + push.z * 0.3 + PULSE_L * uPulse)
-    * mix(TONE_DENS, 1.0, ftone) * (1.0 - MORPH_DIP * dip) * (1.0 - MELT_DIP * mid) * mix(rim, 1.0, k);
+    * mix(TONE_DENS, 1.0, ftone) * (1.0 - MORPH_DIP * dip * (1.0 - ex)) * (1.0 - MELT_DIP * mid * (1.0 - ex))
+    * mix(mix(rim, 1.0, k), 1.0, ex) * (1.0 - WNULL * wv.y);
   // letters sit on the checkerboard lattice (so dense dots never fuse); the field is free blue noise
   float site = mix(1.0, 1.0 - mod(cell.x + cell.y, 2.0), smoothstep(0.2, 0.6, letter));
   float lum = max(mix(lumC, lumL, letter), 0.0); // (the pointer's thinning can push it below zero)
   // a dot's intensity rises smoothly as the density passes its threshold: changes fade, nothing pops
   // (the fade width scales with the density, so sparse dots still come up to full intensity)
   float on = site * clamp((lum - th) / (DOT_FADE * lum + 0.004), 0.0, 1.0);
-  float toneC = (0.3 + 0.12 * D + 0.3 * eNear + 0.3 * push.z) * (1.0 - TWINKLE * tw);
-  float toneL = TONE_L * mix(TONE_BRIGHT, 1.0, ftone) * (1.0 - 0.35 * TWINKLE * tw) * mix(0.72, 1.0, smoothstep(0.75, 1.0, uIntro));
+  float toneC = (0.48 + 0.12 * D + 0.3 * eNear + 0.3 * push.z) * (1.0 - TWINKLE * tw) * (1.0 - FLICK_C * (1.0 - flick));
+  float toneL = TONE_L * mix(TONE_BRIGHT, 1.0, ftone) * (1.0 - 0.35 * TWINKLE * tw) * mix(0.72, 1.0, smoothstep(0.75, 1.0, uIntro))
+    * (1.0 - FLICK_L * (1.0 - sqrt(flick)));
   float tone = mix(mix(toneC, toneL, letter), 1.0, flash);
   vec3 tint = mix(FIELD_TINT, vec3(1.0), max(letter, flash));
 
@@ -776,23 +983,30 @@ void main() {
     vec2 dc = pDev - uE.xy;
     float g = exp(-dot(dc, dc) / pow(GRAD_R * pointerR(), 2.0));
     float eLum = GRAD_D * (1.0 + 0.3 * uLink) * g;
-    float eOn = uE.z * clamp((eLum - th) / (DOT_FADE * eLum + 0.004), 0.0, 1.0);
+    // (its dots light in at random as it appears, instead of the whole gradient fading)
+    float eOn = smoothstep(th2 - 0.25, th2 + 0.25, uE.z * 1.5 - 0.25) * clamp((eLum - th) / (DOT_FADE * eLum + 0.004), 0.0, 1.0);
     if (eOn > on) {
       on = eOn;
       tone = mix(0.45, 1.0, g);
       tint = vec3(1.0);
     }
   }
+  // the nucleus is a ring of dots round a black hole, set off by the dark moat; its dots light in at random too
   float rn = length(pDev - uN.xy);
-  if (uN.z > 0.5 && rn < uN.w * MOAT) {
-    on = rn < uN.w ? 1.0 : 0.0;
+  if (smoothstep(th2 - 0.2, th2 + 0.2, uN.z * 1.4 - 0.2) > 0.5 && rn < uN.w * MOAT) {
+    on = (rn < uN.w && rn >= uN.w * HOLE) ? 1.0 : 0.0;
     tone = 1.0;
     tint = vec3(1.0);
   }
 
   // a dot is either clearly lit or fully off: faint fades never lift the true black (OLED pixels stay off)
   on *= step(DOT_FLOOR, on);
-  gl_FragColor = vec4(mix(uInk, uPaper * tint * clamp(tone, 0.0, 1.0), on), 1.0);
+  // both palettes; each cell fades from one to the other, a wide soft wave sweeping out from the switch (a little grain)
+  float amtOn = on * clamp(tone, 0.0, 1.0);
+  float rk = THEME_GRAIN * th + (1.0 - THEME_GRAIN) * clamp(length(pDev - uThemeO.xy) / max(uThemeO.z, 1.0), 0.0, 1.0);
+  rk = uThemeDir > 0.0 ? rk : 1.0 - rk;
+  float flip = smoothstep(rk - THEME_SOFT, rk + THEME_SOFT, uTheme * (1.0 + 2.0 * THEME_SOFT) - THEME_SOFT);
+  gl_FragColor = vec4(mix(mix(BG_D, FG_D * tint, amtOn), mix(BG_L, FG_L * tint, amtOn), flip), 1.0);
 }
 `;
 
@@ -870,7 +1084,7 @@ function createScene() {
   const fbo = gl.createFramebuffer();
 
   const locs = (p, names) => Object.fromEntries(names.map((n) => [n, gl.getUniformLocation(p, n)]));
-  const UF = locs(field, ["uDev", "uE", "uEV", "uER", "uW[0]", "uTime", "uBlue", "uCells", "uCell", "uPaper", "uIntro", "uLogo", "uTexScale", "uTexOff", "uTexPerCell", "uLet[0]", "uBrand", "uRev", "uRep", "uN", "uLink", "uPulse", "uSea", "uEnergy", "uFocus", "uFocusAmt", "uInk", "uMask"]);
+  const UF = locs(field, ["uDev", "uE", "uEV", "uER", "uW[0]", "uTime", "uBlue", "uCells", "uCell", "uIntro", "uLogo", "uTexScale", "uTexOff", "uTexPerCell", "uLet[0]", "uBrand", "uRev", "uRep", "uN", "uLink", "uPulse", "uSea", "uEnergy", "uFocus", "uFocusAmt", "uMask", "uTog", "uTogHot", "uTheme", "uThemeDir", "uThemeO"]);
   const UC = locs(compose, ["uField", "uCells", "uCell"]);
 
   gl.useProgram(field);
@@ -879,8 +1093,6 @@ function createScene() {
   gl.uniform1i(UF.uBlue, 1);
   gl.uniform2f(UF.uTexScale, wm.cw / wm.tw, wm.ch / wm.th);
   gl.uniform2f(UF.uTexOff, MARGIN / wm.tw, MARGIN / wm.th);
-  gl.uniform3fv(UF.uInk, INK);
-  gl.uniform3fv(UF.uPaper, PAPER);
   gl.useProgram(compose);
   gl.uniform1i(UC.uField, 3);
 
@@ -954,7 +1166,7 @@ function createScene() {
       const w = state.waves[i];
       const age = w ? now - w.t0 : -1;
       const [wx, wy] = w ? toDev(w.x + hr.left, w.y + hr.top) : [0, 0];
-      waveData.set([wx, wy, w ? age : -1, w ? (1 - clamp01(age / WAVE_LIFE)) * clamp01(age / 0.2) : 0], i * 4);
+      waveData.set([wx, wy, w ? age : -1, w ? (1 - clamp01(age / WAVE_LIFE)) * clamp01(age / 0.2) * (w.k ?? 1) : 0], i * 4);
     }
 
     const [l, t, w, h] = state.logoCss;
@@ -977,13 +1189,23 @@ function createScene() {
     gl.uniform1f(UF.uRep, cu.rep);
     const e = state.e;
     const [nx, ny] = toDev(e.tx + hr.left, e.ty + hr.top);
-    gl.uniform4f(UF.uN, nx, ny, e.on && !reduce ? 1 : 0, NUCLEUS_R * dpr * (1 + 0.25 * state.linkAmt));
+    gl.uniform4f(UF.uN, nx, ny, reduce ? 0 : state.nuc, NUCLEUS_R * dpr * (1 + 0.25 * state.linkAmt));
     gl.uniform1f(UF.uPulse, state.pulse);
     const [sx, sy] = toDev(state.stir[0] + hr.left, state.stir[1] + hr.top);
     gl.uniform3f(UF.uSea, reduce ? 0 : 1, sx, sy);
     gl.uniform1f(UF.uEnergy, state.energy);
     gl.uniform4fv(UF.uFocus, state.focusRect ? rectDev(state.focusRect) : [0, 0, 0, 0]);
     gl.uniform1f(UF.uFocusAmt, state.focusAmt);
+
+    // the switch's icon and the theme
+    const tr = themeBtn.getBoundingClientRect();
+    const [tgx, tgy] = toDev(tr.left + tr.width / 2, tr.top + tr.height / 2);
+    gl.uniform4f(UF.uTog, tgx / CELL, tgy / CELL, (ICON_R * dpr) / CELL, state.tog.amt);
+    gl.uniform1f(UF.uTogHot, state.tog.hot);
+    gl.uniform1f(UF.uTheme, theme.amt);
+    gl.uniform1f(UF.uThemeDir, theme.dir);
+    const [tox, toy] = toDev(theme.ox + hr.left, theme.oy + hr.top);
+    gl.uniform3f(UF.uThemeO, tox, toy, Math.hypot(Math.max(tox, dev[0] - tox), Math.max(toy, dev[1] - toy)));
     gl.drawArrays(gl.TRIANGLES, 0, 3);
 
     // pass 2: compose at device pixels
@@ -1077,14 +1299,15 @@ window.addEventListener(
     setTarget(e);
     if (!scene) return;
     // a click on a letter is its link (the browser follows it); anywhere else sends a wave across the screen
-    if (reduce || e.target.closest?.("a")) return;
+    if (reduce || e.target.closest?.("a, button")) return;
     const r = hero.getBoundingClientRect();
     const x = e.clientX - r.left;
     const y = e.clientY - r.top;
-    state.waves.push({ x, y, t0: state.time });
+    // two pulses: the second leaves a moment after the first (its t0 is in the future until then: the shader skips it)
+    for (let k = 0; k < WAVE_PULSES; k++) state.waves.push({ x, y, t0: state.time + k * WAVE_PULSE_GAP, k: 1 - WAVE_PULSE_DECAY * k });
     state.energy = Math.max(state.energy, 0.85);
     state.stir = [x, y];
-    if (state.waves.length > MAX_WAVES) state.waves.shift();
+    while (state.waves.length > MAX_WAVES) state.waves.shift();
   },
   { passive: true }
 );
@@ -1160,6 +1383,12 @@ function update(now, dt) {
   state.energy = Math.min(1, state.energy * Math.exp(-dt / AFTERGLOW) + stirNow * dt * 2.2);
 
   state.focusAmt += (1 - Math.exp(-dt * 12)) * ((state.focusRect ? 1 : 0) - state.focusAmt);
+
+  // the pointer ring's presence, the switch's icon, the theme
+  state.nuc += (1 - Math.exp(-dt * 14)) * ((e.on ? 1 : 0) - state.nuc);
+  stepTween(state.tog, now);
+  state.tog.hot += (1 - Math.exp(-dt * 14)) * ((state.tog.hover || state.tog.focus ? 1 : 0) - state.tog.hot);
+  stepTheme(now);
   state.waves = state.waves.filter((w) => state.time - w.t0 < WAVE_LIFE);
 }
 
@@ -1211,6 +1440,7 @@ const forced = new URLSearchParams(location.search).has("boot");
 
 async function boot() {
   if (reduce) {
+    state.tog.amt = 1;
     html.classList.add("ready");
     updateLetters(performance.now());
     if (scene) {
@@ -1234,6 +1464,7 @@ async function boot() {
   html.classList.remove("booting");
   html.classList.add("ready");
   ready = true;
+  tweenTo(state.tog, 1, ICON_IN_MS, performance.now());
   try {
     sessionStorage.setItem("cc-boot", "1");
   } catch {
@@ -1273,6 +1504,9 @@ if (new URLSearchParams(location.search).has("debug")) {
     finish() {
       state.intro = 1;
       ready = true;
+      tweenTo(state.tog, 1, ICON_IN_MS, performance.now());
     },
+    setTheme,
+    theme,
   };
 }
