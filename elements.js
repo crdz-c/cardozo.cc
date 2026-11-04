@@ -3,14 +3,14 @@
 // The page keeps its real DOM (layout, links, focus, screen readers). When WebGL runs, those elements are
 // made transparent and this module rasterises them into one screen-sized "UI mask" that the shaders read:
 //
-//   R  text: glyph coverage × density. Read at device resolution and dithered there, so small type stays
-//      legible while still being made of dots.
+//   R  text: the element's own web font, rasterised at device pixels (coverage × density). The field pass
+//      samples it once per cell, so type is drawn with exactly the field's square cells.
 //   G  shapes: 0.25 marks an element's area (the field quiets down under it); above that, a shape whose
 //      dots are drawn on the field's lattice at density (G − 0.25) / 0.75 (borders, SVG fills, …).
 //   B  image tone: an image becomes a density map for the same dots.
 //
 // Every draw uses additive blending ("lighter") in a pure channel colour, so it only touches its channel.
-// The wordmark is not drawn here: it has its own texture (distance fields, flips, stickiness).
+// The wordmark is not drawn here: it has its own texture (distance fields, flips).
 
 const AREA = 0.25;
 
@@ -19,9 +19,9 @@ export function createElements(onChange) {
   return {
     list,
     // { id, kind: "text" | "box" | "svg" | "image" | "wordmark", node, density = 1, hover = false,
-    //   sticky = false, area = false, outline = false, src }
+    //   area = false, outline = false, src }
     add(spec) {
-      const el = { density: 1, hover: false, sticky: false, area: false, outline: false, ...spec };
+      const el = { density: 1, hover: false, area: false, outline: false, ...spec };
       if (el.kind === "image") {
         el.img = el.node instanceof HTMLImageElement ? el.node : new Image();
         if (el.src) el.img.src = el.src;
@@ -35,20 +35,22 @@ export function createElements(onChange) {
 
 const byte = (v) => Math.round(Math.min(1, Math.max(0, v)) * 255);
 
+// Draw a node's text in its own computed font, glyph by glyph at the exact boxes the browser laid them out in
+// (letter-spacing, transforms, wrapping), skipping screen-reader-only text. Returns the text's box (client px).
 function drawText(ctx, node, value) {
   const walker = document.createTreeWalker(node, NodeFilter.SHOW_TEXT);
   const range = document.createRange();
   ctx.fillStyle = `rgb(${value},0,0)`;
   ctx.textBaseline = "alphabetic";
+  let box = null;
   for (let t = walker.nextNode(); t; t = walker.nextNode()) {
-    if (t.parentElement.closest(".sr-only")) continue; // screen-reader-only text is never drawn
+    if (t.parentElement.closest(".sr-only")) continue;
     const cs = getComputedStyle(t.parentElement);
     if (cs.display === "none" || cs.visibility === "hidden") continue;
     ctx.font = `${cs.fontStyle} ${cs.fontWeight} ${cs.fontSize} ${cs.fontFamily}`;
     const upper = cs.textTransform === "uppercase";
     const size = parseFloat(cs.fontSize);
     const text = t.data;
-    // one glyph at a time, at the exact box the browser laid it out in (letter-spacing, wrapping, …)
     for (let i = 0; i < text.length; i++) {
       const ch = text[i];
       if (/\s/.test(ch)) continue;
@@ -57,10 +59,18 @@ function drawText(ctx, node, value) {
       const r = range.getBoundingClientRect();
       if (!r.width) continue;
       const glyph = upper ? ch.toUpperCase() : ch;
-      const asc = ctx.measureText(glyph).fontBoundingBoxAscent ?? size * 0.8;
+      const m = ctx.measureText(glyph);
+      const asc = m.fontBoundingBoxAscent ?? size * 0.8;
       ctx.fillText(glyph, r.left, r.top + asc);
+      const top = r.top + asc - (m.actualBoundingBoxAscent ?? size * 0.7);
+      const bottom = r.top + asc + Math.max(0, m.actualBoundingBoxDescent ?? 0);
+      const right = r.left + m.width;
+      box = box
+        ? { left: Math.min(box.left, r.left), right: Math.max(box.right, right), top: Math.min(box.top, top), bottom: Math.max(box.bottom, bottom) }
+        : { left: r.left, right, top, bottom };
     }
   }
+  return box;
 }
 
 function drawImage(ctx, el, r, dpr, hr) {
@@ -89,9 +99,10 @@ function drawImage(ctx, el, r, dpr, hr) {
   ctx.restore();
 }
 
-// Rasterise every element into `canvas` (device pixels covering `hero`). `lineCss` is the width of a
-// drawn line in CSS px: one dither cell, so a border always lands on a row of cells.
-export function rasterise(list, canvas, hero, dpr, lineCss) {
+// Rasterise every element into `canvas` (device pixels covering `hero`). `cell` is the size of a
+// field cell in device px: borders are one cell wide.
+export function rasterise(list, canvas, hero, dpr, cell) {
+  const lineCss = cell / dpr;
   const hr = hero.getBoundingClientRect();
   canvas.width = Math.max(1, Math.round(hr.width * dpr));
   canvas.height = Math.max(1, Math.round(hr.height * dpr));
@@ -118,7 +129,7 @@ export function rasterise(list, canvas, hero, dpr, lineCss) {
       ctx.lineWidth = lineCss;
       ctx.strokeRect(r.left + lineCss / 2, r.top + lineCss / 2, r.width - lineCss, r.height - lineCss);
     }
-    if (el.kind === "text") drawText(ctx, el.node, byte(el.density));
+    if (el.kind === "text") el.textBox = drawText(ctx, el.node, byte(el.density));
     else if (el.kind === "svg") {
       const vb = el.node.viewBox.baseVal;
       ctx.save();

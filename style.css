@@ -120,53 +120,35 @@ a {
   opacity: 1;
 }
 
-/* ---------------------------------------------------------------- labels and links
-   One type system for the interface: the display face, bold, uppercase, tracked, big enough to stay
-   legible when it is drawn in dots. */
+/* ---------------------------------------------------------------- links
+   Stacked under the wordmark, centred, one per line: no container, no dividers, no arrows. One type for the
+   interface: Big Shoulders Display, bold, condensed, uppercase — the closest to the wordmark we ship. */
 
-.bar,
+.dock {
+  --logo-w: clamp(190px, 39vw, 690px);
+  --gap: clamp(22px, 4.5vh, 48px);
+  position: absolute;
+  left: 50%;
+  top: calc(50% + var(--logo-w) * 0.0875 + var(--gap));
+  z-index: 2;
+  transform: translateX(-50%);
+}
+
 .links {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
   font-family: var(--font-display);
   font-size: 15px;
   font-weight: 700;
   line-height: 1;
-  letter-spacing: 0.12em;
+  letter-spacing: 0.08em;
   text-transform: uppercase;
 }
 
-.bar {
-  position: relative;
-  z-index: 2;
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 24px;
-  min-height: 24px;
-  color: var(--dim);
-}
-
-/* ---------------------------------------------------------------- link container
-   One quiet bordered container across the bottom of the screen, no dividers: six equal cells, evenly
-   spread (3 × 2 on phones). */
-
-.dock {
-  position: relative;
-  z-index: 2;
-}
-
-.links {
-  display: grid;
-  grid-template-columns: repeat(6, 1fr);
-  width: 100%;
-  border: 1px solid var(--line-strong);
-}
-
 .links a {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  min-height: 52px;
-  padding: 0 8px;
+  display: block;
+  padding: 5px 10px;
   color: var(--paper);
   white-space: nowrap;
   transition: background 0.35s var(--ease), color 0.35s var(--ease);
@@ -176,10 +158,6 @@ a {
 .links a:focus-visible {
   background: var(--paper);
   color: var(--ink);
-}
-
-.links a:focus-visible {
-  outline-offset: -4px;
 }
 
 /* ---------------------------------------------------------------- the logo
@@ -336,17 +314,15 @@ a {
 
 @media (max-width: 699.98px) {
   .logo { width: 60vw; }
-  .bar, .links { font-size: 13px; letter-spacing: 0.1em; }
-  .links { grid-template-columns: repeat(3, 1fr); }
-  .links a { min-height: 50px; padding: 0 4px; }
+  .dock { --logo-w: 60vw; }
+  .links { font-size: 14px; }
 }
 
 /* ---------------------------------------------------------------- rendered into the dots
-   With WebGL the labels and the link container are drawn by the shader (see elements.js). The DOM
+   With WebGL the links are drawn by the shader (see elements.js). The DOM
    versions stay in layout and keep working (click, keyboard, screen readers) but are visually transparent;
    the focus ring is drawn in dots too. */
 
-.gl .bar,
 .gl .links,
 .gl .links a,
 .gl .links a:hover,

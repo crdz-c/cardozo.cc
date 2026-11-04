@@ -1,6 +1,6 @@
-// cardozo.cc hero — one canvas of dots. Every element of the interface (the CRDZC wordmark, the labels,
-// the link container) is rendered *into* a single dithered dot field; the pointer is an "electron" that
-// pushes that field around and sticks to the letters; a click on the background sends a wave across it.
+// cardozo.cc hero — one canvas of dots. Every element of the interface (the CRDZC wordmark and the links)
+// is rendered *into* a single dithered dot field; the pointer is an "electron" that pushes that field
+// around; letters flip when it enters them; a click on the background sends a wave across the screen.
 // No dependencies. Everything degrades: no JS → static page; no WebGL → the SVG wordmark and the DOM
 // links; prefers-reduced-motion → one still frame (still in dots), no boot, no flips, no waves.
 
@@ -27,16 +27,12 @@ const rand = (a, b) => a + Math.random() * (b - a);
 // ------------------------------------------------------------------ knobs (interaction, JS side)
 // Distances in wordmark heights (h). Springs: angular frequency ω (1/s) and damping ratio ζ.
 const ELECTRON_R = 32; // CSS px: radius of the electron's push
-const ELECTRON_SPRING = [34, 1]; // free: fast and critically damped, precise, never overshoots
-const ELECTRON_STUCK = [13, 1]; // stuck: it trails the pointer like something on a rubber band
-const ENTER = 0.26; // h: an electron this close to a letter's edge gets captured by it
-const MAX_PULL = 0.62; // h: how far a bubble can stretch out of its letter before it lets go or hands over
-const REARM = 1.7; // × ENTER: a released letter can capture again only after the electron got this far
-const TURN_BACK = 0.14; // h: moving this far against the capture direction is a "direction change"
-const BUBBLE_SPRING = [7, 0.95]; // the tendril's tip: slow, elastic, almost no bounce
-const EDGE_SPRING = [14, 1]; // where the tendril leaves the letter's edge
-const LET_GO = 4.5; // ω of the tendril retracting after a release (slow letting go)
+const ELECTRON_SPRING = [26, 1]; // critically damped: fluid but precise, never overshoots
 const AFTERGLOW = 2.8; // s: decay time of the field's stirred-up energy
+const MAX_SPEED = 2400; // CSS px/s: cap on the speed the field's deflection and wake respond to
+const ENTER_IN = 0.02; // h: the pointer is "in" a letter this far inside its (rounded) edge…
+const ENTER_OUT = 0.08; // h: …and must get this far outside it before the letter can flip again
+const FLIP_COOLDOWN = 250; // ms after a flip ends before the same letter can flip again
 const WAVE_LIFE = 1.9; // s
 const MAX_WAVES = 4;
 
@@ -48,14 +44,8 @@ const state = {
   logoCss: [0, 0, 1, 1], // left, top, w, h of the wordmark (client px)
   // the electron, in hero CSS px
   e: { x: -1e4, y: -1e4, vx: 0, vy: 0, tx: -1e4, ty: -1e4, on: false, str: 0, sv: 0 },
-  // the sticky bubble
-  stuck: -1, // letter index, or -1 when free
-  blob: { x: 0, y: 0, vx: 0, vy: 0, ax: 0, ay: 0, avx: 0, avy: 0, str: 0, sv: 0, letter: 0, want: 0 },
   energy: 0, // stirred-up energy of the field (0..1), decays over AFTERGLOW
   stir: [0, 0], // where it was last stirred, hero CSS px
-  capDir: 1,
-  capExtreme: 0,
-  rearm: [true, true, true, true, true],
   hot: null, // hovered element { el, rect }
   hotAmt: 0,
   hotRect: [0, 0, 0, 0],
@@ -65,8 +55,8 @@ const state = {
 };
 
 // ------------------------------------------------------------------ per-letter flips
-// Every letter starts in a random orientation on every load. After that a letter flips only when the
-// electron newly captures it (horizontally or vertically at random, around its own centre).
+// Every letter starts in a random orientation on every load. After that a letter flips only when the pointer
+// enters it (or a finger taps it): horizontally or vertically at random, around its own centre.
 const LETTERS = 5;
 const LETTER_EDGES = [-1, 18.55 / 90, 36.15 / 90, 54.75 / 90, 71.15 / 90, 2]; // gap midpoints, in u
 const LETTER_CENTERS = [8.9 / 90, 27.35 / 90, 45.45 / 90, 62.95 / 90, 80.8 / 90];
@@ -80,6 +70,8 @@ const flips = Array.from({ length: LETTERS }, () => ({
   flipping: false,
   t0: 0,
   dur: 0,
+  readyAt: 0, // not before this time (cooldown)
+  armed: true, // re-armed once the pointer has left the letter
 }));
 const letterGroups = [...logoSvg.querySelectorAll(".lt")];
 let flipsArmed = false;
@@ -97,7 +89,7 @@ function flipSvg() {
 
 function startFlip(i, now) {
   const f = flips[i];
-  if (f.flipping || reduce) return;
+  if (f.flipping || reduce || now < f.readyAt) return;
   f.axis = Math.random() < HORIZONTAL_BIAS[i] ? "x" : "y";
   f.flipping = true;
   f.t0 = now;
@@ -120,6 +112,7 @@ function updateFlips(now) {
         sx = f.mx;
         sy = f.my;
         f.flipping = false;
+        f.readyAt = now + FLIP_COOLDOWN;
       }
     }
     flipUniform[i * 2] = sx;
@@ -154,12 +147,12 @@ function fallbackFlip(e, force) {
 // ------------------------------------------------------------------ wordmark texture
 // The SVG paths are rasterised once, their corners rounded, and per texel we store:
 //   R coverage · G distance to the edge inside a letter · B closeness to a letter outside it.
-// A CPU copy of the signed distance stays around for the electron's capture logic.
+// A CPU copy of the signed distance stays around for the pointer's enter test.
 const VBW = 90;
 const VBH = 15.75;
 const TEXELS_PER_UNIT = 22;
 const TEX_H = VBH * TEXELS_PER_UNIT; // texels per wordmark height
-const HALO = 230; // texels: range of the outside distance (must cover MAX_PULL)
+const HALO = 170; // texels: range of the outside distance (soft edges, the pointer's enter test)
 const MARGIN = HALO + 10; // transparent border so outside distances fit and sampling past the edge reads 0
 const DEPTH = 55; // texels: range of the inside distance
 const ROUND_OPEN = 17; // texels (≈ 4.9% of the letter height): radius of the outer corners
@@ -243,10 +236,11 @@ uniform vec4  uW[4];      // waves: x, y (device px), age (s, < 0 = off), amplit
 uniform float uTime;
 uniform sampler2D uBlue;
 
-#define PUSH_AMT 0.42      // radial push, × electron radius
+#define PUSH_AMT 0.6       // radial push, × electron radius
 #define DEFLECT 0.35       // sideways deflection at speed, × electron radius
-#define RING 0.55          // density piled up where the pushed field compresses
-#define WAKE 0.35          // density in the short wake behind a moving electron
+#define RING 0.75          // density piled up where the pushed field compresses
+#define THIN 0.6           // density cleared inside the electron's reach (around its core)
+#define WAKE 0.5           // density in the short wake behind a moving electron
 #define WAVE_SPEED 0.95    // screen heights per second
 #define WAVE_WIDTH 0.03    // screen heights
 #define WAVE_PUSH 0.007    // screen heights
@@ -273,6 +267,7 @@ vec3 pushAt(vec2 p) {
   o.xy += dir * PUSH_AMT * R * f;
   o.xy += perp * side * DEFLECT * R * f * fast;
   o.z += uE.z * RING * exp(-pow((r - 1.15 * R) / (0.4 * R), 2.0));
+  o.z -= uE.z * THIN * exp(-pow(r / (0.8 * R), 2.0)); // pushed out: thinner inside, bunched at the rim
   if (sp > 1.0) {
     vec2 tail = uE.xy - uEV * 0.07;
     o.z += uE.z * WAKE * fast * exp(-dot(p - tail, p - tail) / (R * R * 1.4));
@@ -312,16 +307,13 @@ precision highp float;
 #define SEA_SCALE 0.3      // swell size, screen heights
 #define SEA_SPEED 0.05     // swell speed
 #define SEA_RIPPLE 0.07    // ripple frequency, per cell (≈ 14-cell clusters)
-#define NECK_BASE 0.1      // tendril radius where it leaves the stroke, × wordmark height
-#define NECK_TIP 0.055     // … at its tip
-#define NECK_THIN 0.55     // how much the middle thins when fully stretched
-#define NECK_FUSE 0.12     // smooth-union width where it joins the letter, × wordmark height
-#define MAX_PULL_H ${MAX_PULL.toFixed(2)}
 #define CORE 0.32          // electron core radius, × electron radius
 #define LINE_TONE 0.5      // UI shapes (borders)
 #define AREA_QUIET 0.25    // field density under a UI element
-#define HOT_DENS 0.16      // fill of a hovered UI element
 #define IMG_DENS 0.9       // image tone → dot density
+#define TEXT_CUT 0.42      // glyph coverage that lights a cell (lower = bolder)
+#define TEXT_LATTICE 0.0   // 1: words on the field's checkerboard lattice at rest · 0: every cell
+#define TEXT_TONE 0.86     // text tone at rest (1 on hover and near the electron)
 
 ${PUSH}
 
@@ -334,8 +326,6 @@ uniform vec2  uTexScale;
 uniform vec2  uTexOff;
 uniform float uTexPerCell;
 uniform vec2  uFlip[5];
-uniform vec4  uBlob;      // tendril tip: x, y (device px), strength, letter index
-uniform vec2  uAnchor;    // tendril base on the letter's edge, device px
 uniform vec3  uSea;       // calm-sea drift: amplitude (cells), stir x, y (device px)
 uniform float uEnergy;    // stirred-up energy 0..1 (afterglow)
 uniform vec4  uHot;       // hovered UI element, device px (x0, y0, x1, y1)
@@ -358,10 +348,6 @@ float vnoise(vec3 x) {
   float c = mix(hash3(i + vec3(0.0, 0.0, 1.0)), hash3(i + vec3(1.0, 0.0, 1.0)), f.x);
   float d = mix(hash3(i + vec3(0.0, 1.0, 1.0)), hash3(i + vec3(1.0, 1.0, 1.0)), f.x);
   return mix(mix(a, b, f.y), mix(c, d, f.y), f.z);
-}
-float smin(float a, float b, float k) {
-  float h = max(k - abs(a - b), 0.0) / max(k, 0.0001);
-  return min(a, b) - h * h * k * 0.25;
 }
 float inRect(vec2 p, vec4 r) {
   return step(r.x, p.x) * step(p.x, r.z) * step(r.y, p.y) * step(p.y, r.w);
@@ -515,23 +501,6 @@ void main() {
     vec2 qr = q - vec2(0.0, 0.18 * (1.0 - eo));
 
     float sd = letterSD(li, qr, aspect);
-    // the sticky bubble: the captured letter's shape, smoothly united with a blob at the electron
-    if (uBlob.z > 0.001) {
-      // the sticky tendril: a tapered capsule from the edge point (uAnchor) to the tip (uBlob.xy), wide at
-      // the stroke and thinning in the middle as it stretches, smoothly fused into the captured letter.
-      // It grows out of the nearest edge, so counters stay open and strokes stay readable.
-      float bs = uBlob.z;
-      vec2 a = uAnchor / uCell;
-      vec2 bt = uBlob.xy / uCell;
-      vec2 pa = pDev / uCell - a;
-      vec2 ba = bt - a;
-      float hh = clamp(dot(pa, ba) / max(dot(ba, ba), 0.0001), 0.0, 1.0);
-      float stretch = clamp(length(ba) / (MAX_PULL_H * uLogo.w), 0.0, 1.0);
-      float rad = mix(NECK_BASE, NECK_TIP, hh) * uLogo.w * bs * (1.0 - NECK_THIN * stretch * sin(3.14159 * hh));
-      float dT = length(pa - ba * hh) - rad;
-      float dL = -letterSD(uBlob.w, qr, aspect);
-      sd = max(sd, -smin(dL, dT, NECK_FUSE * uLogo.w));
-    }
 
     vec2 pc = (cs - (uLogo.xy + 0.5 * uLogo.zw)) / uCells.y;
     float nz = vnoise(vec3(pc * 4.5, uTime * 0.07)) * 0.65 + vnoise(vec3(pc * 11.0 + 3.0, uTime * 0.11)) * 0.35;
@@ -565,22 +534,33 @@ void main() {
     }
   }
 
-  // ---- UI shapes (borders, SVG, images) and states, as dots on the same lattice
-  float hot = inRect(pDev, uHot) * uHotAmt;
-  // shapes light every lattice site along them (a clean dotted line) and carry their density as tone;
-  // areas take images and hover fills as density
-  float uiLum = (step(0.02, shape) + area * (ui.b * IMG_DENS + hot * HOT_DENS) + push.z * area * 0.3) * uUi;
-  if (site * step(th, uiLum) > 0.5) {
+  // ---- UI type: each element's own web font, sampled once per cell (two taps across the cell for a little
+  // extra weight), so words are drawn with the field's own square cells. The displacement is snapped to whole
+  // even cell steps (keeping the lattice's parity) and softened inside the hovered word, so it stays readable.
+  float hotHere = inRect(pDev, uHot) * uHotAmt;
+  vec2 tshift = 2.0 * floor(push.xy * (1.0 - 0.75 * hotHere) / (2.0 * uCell) + 0.5);
+  vec2 tp = (cell + 0.5 - tshift) * uCell;
+  float tr = max(texture2D(uUI, tp / uDev).r, texture2D(uUI, (tp + vec2(0.45 * uCell, 0.0)) / uDev).r);
+  float lift = clamp(max(hotHere, eNear * 1.4), 0.0, 1.0);
+  float tsite = mix(1.0, site, TEXT_LATTICE * (1.0 - lift)); // hovered: every cell, finer and denser
+  if (step(TEXT_CUT, tr) * tsite * uUi > 0.5) {
     on = 1.0;
-    tone = mix(LINE_TONE * (0.4 + 0.6 * shape), 0.95, max(hot, ui.b)) * (1.0 - 0.5 * TWINKLE * tw);
+    tone = mix(TEXT_TONE, 1.0, lift);
     tint = vec3(1.0);
   }
-  // keyboard focus: a dotted ring just outside the element
-  vec2 fc = 0.5 * (uFocus.xy + uFocus.zw);
-  vec2 fh = 0.5 * (uFocus.zw - uFocus.xy) + 4.0 * uCell;
-  vec2 fq = abs(pDev - fc) - fh;
-  float fd = length(max(fq, 0.0)) + min(max(fq.x, fq.y), 0.0);
-  if (uFocusAmt > 0.01 && abs(fd) < uCell * 0.75 && site > 0.5 && th < uFocusAmt) {
+
+  // ---- UI shapes (borders, SVG, images) and states, as dots on the same lattice
+  // shapes light every lattice site along them (a clean dotted line) and carry their density as tone;
+  // areas take images and hover fills as density
+  float uiLum = (step(0.02, shape) + area * ui.b * IMG_DENS) * uUi;
+  if (site * step(th, uiLum) > 0.5) {
+    on = 1.0;
+    tone = mix(LINE_TONE * (0.4 + 0.6 * shape), 0.95, ui.b) * (1.0 - 0.5 * TWINKLE * tw);
+    tint = vec3(1.0);
+  }
+  // keyboard focus: a dotted underline under the focused word
+  float under = step(uFocus.x, pDev.x) * step(pDev.x, uFocus.z) * step(abs(pDev.y - (uFocus.y - 3.0 * uCell)), uCell * 0.75);
+  if (uFocusAmt > 0.01 && under * site > 0.5 && th < uFocusAmt) {
     on = 1.0;
     tone = 0.95;
     tint = vec3(1.0);
@@ -592,43 +572,22 @@ void main() {
 
 const COMPOSE = `
 precision highp float;
-#define TEXT_DENS 0.97     // text: share of glyph pixels lit
-#define TEXT_TONE 0.86     // text tone at rest
-
-${PUSH}
-
 uniform sampler2D uField;
-uniform sampler2D uUI;
 uniform vec2  uCells;
 uniform float uCell;
-uniform float uUi;
-uniform vec4  uHot;
-uniform float uHotAmt;
-uniform vec3  uPaper;
-
 void main() {
-  vec2 px = floor(gl_FragCoord.xy);
-  vec2 cell = floor(px / uCell);
-  vec3 col = texture2D(uField, (cell + 0.5) / uCells).rgb;
-  vec3 push = pushAt(px + 0.5);
-  float t = texture2D(uUI, (px + 0.5 - push.xy) / uDev).r;
-  float hot = step(uHot.x, px.x) * step(px.x, uHot.z) * step(uHot.y, px.y) * step(px.y, uHot.w) * uHotAmt;
-  float on = step(blue(px + vec2(17.0, 5.0)), t * TEXT_DENS * uUi);
-  vec3 tc = uPaper * mix(TEXT_TONE, 1.0, clamp(max(hot, push.z), 0.0, 1.0));
-  gl_FragColor = vec4(mix(col, tc, on), 1.0);
+  vec2 cell = floor(floor(gl_FragCoord.xy) / uCell);
+  gl_FragColor = vec4(texture2D(uField, (cell + 0.5) / uCells).rgb, 1.0);
 }
 `;
 
 // ------------------------------------------------------------------ scene elements
 // The registry of everything rendered into the dots. Layout stays in the DOM; see README "Adding an element".
 const elements = createElements(() => scene?.rebuildUI());
-elements.add({ id: "wordmark", kind: "wordmark", node: logoSvg, sticky: true });
-elements.add({ id: "labels", kind: "text", node: hero.querySelector(".bar"), density: 1 });
-const linksNav = hero.querySelector(".links");
-elements.add({ id: "links", kind: "box", node: linksNav, area: true, outline: true, density: 0.45 });
-linksNav.querySelectorAll("a").forEach((a, i) => {
-  elements.add({ id: `link-${i}`, kind: "box", node: a, hover: true }); // no divider: only a hover target
-  elements.add({ id: `link-${i}-text`, kind: "text", node: a, density: 1 });
+elements.add({ id: "wordmark", kind: "wordmark", node: logoSvg });
+hero.querySelectorAll(".links a").forEach((a, i) => {
+  // no container, no dividers: each link is a word in dots plus a hover target
+  elements.add({ id: `link-${i}`, kind: "text", node: a, hover: true });
 });
 
 // ------------------------------------------------------------------ WebGL
@@ -694,8 +653,8 @@ function createScene() {
 
   const locs = (p, names) => Object.fromEntries(names.map((n) => [n, gl.getUniformLocation(p, n)]));
   const common = ["uDev", "uE", "uEV", "uER", "uW[0]", "uTime", "uBlue", "uUI", "uCells", "uCell", "uUi", "uHot", "uHotAmt", "uPaper"];
-  const UF = locs(field, [...common, "uIntro", "uLogo", "uTexScale", "uTexOff", "uTexPerCell", "uFlip[0]", "uBlob", "uAnchor", "uSea", "uEnergy", "uFocus", "uFocusAmt", "uInk", "uMask"]);
-  const UC = locs(compose, [...common, "uField"]);
+  const UF = locs(field, [...common, "uIntro", "uLogo", "uTexScale", "uTexOff", "uTexPerCell", "uFlip[0]", "uSea", "uEnergy", "uFocus", "uFocusAmt", "uInk", "uMask"]);
+  const UC = locs(compose, ["uField", "uCells", "uCell"]);
 
   gl.useProgram(field);
   gl.uniform1i(UF.uMask, 0);
@@ -706,10 +665,7 @@ function createScene() {
   gl.uniform3fv(UF.uInk, INK);
   gl.uniform3fv(UF.uPaper, PAPER);
   gl.useProgram(compose);
-  gl.uniform1i(UC.uBlue, 1);
-  gl.uniform1i(UC.uUI, 2);
   gl.uniform1i(UC.uField, 3);
-  gl.uniform3fv(UC.uPaper, PAPER);
 
   // A dither cell is ~1/80 of the wordmark's height, between 1 and 1.5 CSS px and never under 2 device px.
   // The canvas itself runs at device pixels; the field pass runs at one fragment per cell.
@@ -722,7 +678,7 @@ function createScene() {
   const waveData = new Float32Array(16);
 
   function rebuildUI() {
-    rasterise(elements.list, uiCanvas, hero, dpr, CELL / dpr);
+    rasterise(elements.list, uiCanvas, hero, dpr, CELL);
     gl.activeTexture(gl.TEXTURE2);
     gl.bindTexture(gl.TEXTURE_2D, uiTex);
     gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, true);
@@ -740,6 +696,8 @@ function createScene() {
     cells = [Math.ceil(dev[0] / CELL), Math.ceil(dev[1] / CELL)];
     canvas.width = dev[0];
     canvas.height = dev[1];
+    // the DOM text reserves exactly the dot font's room: one character = 6 font dots, 2 cells each
+    html.style.setProperty("--dot", `${(2 * CELL) / dpr}px`);
     gl.activeTexture(gl.TEXTURE3);
     gl.bindTexture(gl.TEXTURE_2D, fieldTex);
     gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, cells[0], cells[1], 0, gl.RGBA, gl.UNSIGNED_BYTE, null);
@@ -773,7 +731,10 @@ function createScene() {
     const [ex, ey] = toDev(e.x + hr.left, e.y + hr.top);
     gl.uniform2f(U.uDev, dev[0], dev[1]);
     gl.uniform3f(U.uE, ex, ey, e.str);
-    gl.uniform2f(U.uEV, e.vx * dpr, -e.vy * dpr);
+    // speed-dependent terms see at most MAX_SPEED, so a flick can never smear the field
+    const sp = Math.hypot(e.vx, e.vy);
+    const k = sp > MAX_SPEED ? MAX_SPEED / sp : 1;
+    gl.uniform2f(U.uEV, e.vx * k * dpr, -e.vy * k * dpr);
     gl.uniform1f(U.uER, ELECTRON_R * dpr);
     gl.uniform4fv(U["uW[0]"], waveData);
     gl.uniform1f(U.uTime, state.time);
@@ -786,6 +747,7 @@ function createScene() {
 
   function draw() {
     hr = hero.getBoundingClientRect();
+    measureLogo();
     if (state.hot) state.hotRect = rectDev(state.hot.el.node.getBoundingClientRect());
     // waves → uniforms
     const now = state.time;
@@ -807,11 +769,6 @@ function createScene() {
     gl.uniform1f(UF.uTexPerCell, wm.ch / Math.max(1, (h * dpr) / CELL));
     gl.uniform1f(UF.uIntro, state.intro);
     gl.uniform2fv(UF["uFlip[0]"], flipUniform);
-    const b = state.blob;
-    const [bx, by] = toDev(b.x + hr.left, b.y + hr.top);
-    gl.uniform4f(UF.uBlob, bx, by, b.str, b.letter);
-    const [ax, ay] = toDev(b.ax + hr.left, b.ay + hr.top);
-    gl.uniform2f(UF.uAnchor, ax, ay);
     const [sx, sy] = toDev(state.stir[0] + hr.left, state.stir[1] + hr.top);
     gl.uniform3f(UF.uSea, reduce ? 0 : 1, sx, sy);
     gl.uniform1f(UF.uEnergy, state.energy);
@@ -823,10 +780,8 @@ function createScene() {
     gl.bindFramebuffer(gl.FRAMEBUFFER, null);
     gl.viewport(0, 0, dev[0], dev[1]);
     gl.useProgram(compose);
-    setCommon(UC);
-    // small type only feels a quarter of the electron's push, so a hovered link stays readable
-    const [ex, ey] = toDev(state.e.x + hr.left, state.e.y + hr.top);
-    gl.uniform3f(UC.uE, ex, ey, state.e.str * 0.25);
+    gl.uniform2f(UC.uCells, cells[0], cells[1]);
+    gl.uniform1f(UC.uCell, CELL);
     gl.drawArrays(gl.TRIANGLES, 0, 3);
   }
 
@@ -837,97 +792,62 @@ function createScene() {
     html.classList.remove("gl");
   });
 
-  return { draw, rebuildUI, rectDev };
+  // debug only: the field as rendered (one pixel per cell), cropped to a client-px rect, scaled up `zoom`×
+  function cropCells(x, y, w, h, zoom = 3) {
+    draw();
+    const c0 = Math.floor(((x - hr.left) * dpr) / CELL);
+    const r1 = Math.floor(((hr.bottom - y) * dpr) / CELL);
+    const cw = Math.ceil((w * dpr) / CELL);
+    const ch = Math.ceil((h * dpr) / CELL);
+    const r0 = Math.max(0, r1 - ch);
+    const px = new Uint8Array(cw * ch * 4);
+    gl.bindFramebuffer(gl.FRAMEBUFFER, fbo);
+    gl.readPixels(c0, r0, cw, ch, gl.RGBA, gl.UNSIGNED_BYTE, px);
+    gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+    const out = document.createElement("canvas");
+    out.width = cw * zoom;
+    out.height = ch * zoom;
+    const o = out.getContext("2d");
+    const img = o.createImageData(cw, ch);
+    for (let row = 0; row < ch; row++) img.data.set(px.subarray((ch - 1 - row) * cw * 4, (ch - row) * cw * 4), row * cw * 4);
+    const tmp = document.createElement("canvas");
+    tmp.width = cw;
+    tmp.height = ch;
+    tmp.getContext("2d").putImageData(img, 0, 0);
+    o.imageSmoothingEnabled = false;
+    o.drawImage(tmp, 0, 0, out.width, out.height);
+    return out.toDataURL("image/png");
+  }
+
+  return { draw, rebuildUI, rectDev, cropCells };
 }
 
-// ------------------------------------------------------------------ the electron and the sticky bubble
-// State machine (see README): FREE ⇄ STUCK(i).
-//   FREE → STUCK(i): the electron comes within ENTER of letter i's edge (and i is re-armed). Letter i flips.
-//   STUCK(i): a bubble grows out of i toward the electron, anchored at most MAX_PULL from i.
-//     · pulled past MAX_PULL and within ENTER of another letter j → STUCK(j) (capture hands over, j flips)
-//     · pulled past MAX_PULL with no letter near → FREE (the neck snaps back)
-//     · direction change: the electron travels TURN_BACK back against the direction it was captured in
-//       → FREE; it then captures the next letter it reaches in the new direction
-//     · the electron leaves (pointer out / finger up) → FREE
-//   A released letter re-arms once the electron is REARM × ENTER away from it.
+// ------------------------------------------------------------------ flips on enter
 function wordmarkPoint(x, y) {
   // hero CSS px → wordmark units (u across, v up) and the aspect ratio
   const hr = hero.getBoundingClientRect();
   const [l, t, w, h] = state.logoCss;
-  return { qx: (x + hr.left - l) / w, qy: (t + h - (y + hr.top)) / h, aspect: w / h, h, w };
+  return { qx: (x + hr.left - l) / w, qy: (t + h - (y + hr.top)) / h, aspect: w / h };
 }
 
-function distances(x, y) {
-  const p = wordmarkPoint(x, y);
-  const d = [];
-  for (let i = 0; i < LETTERS; i++) d.push(-letterDistance(i, p.qx, p.qy, p.aspect)); // + outside, in h
-  return { d, p };
-}
-
-function capture(i, now) {
-  state.stuck = i;
-  state.blob.letter = i;
-  state.capDir = Math.abs(state.e.vx) > 30 ? Math.sign(state.e.vx) : 1;
-  state.capExtreme = state.capDir * state.e.x;
-  state.rearm[i] = false;
-  startFlip(i, now);
-}
-
-function release() {
-  if (state.stuck >= 0) state.rearm[state.stuck] = false;
-  state.stuck = -1;
-}
-
-function updateSticky(now) {
+// A letter flips when the pointer enters its shape. Hysteresis (ENTER_IN / ENTER_OUT) and a cooldown keep it
+// from retriggering while it turns or when the pointer jitters on its edge.
+function enterFlips(x, y, now, tap) {
   if (!wordmarkSD || !flipsArmed) return;
-  const e = state.e;
-  const { d, p } = distances(e.x, e.y);
-  for (let i = 0; i < LETTERS; i++) if (i !== state.stuck && d[i] > ENTER * REARM) state.rearm[i] = true;
-
-  if (!e.on) {
-    release();
-  } else if (state.stuck < 0) {
-    let best = -1;
-    for (let i = 0; i < LETTERS; i++) if (state.rearm[i] && d[i] < ENTER && (best < 0 || d[i] < d[best])) best = i;
-    if (best >= 0) capture(best, now);
-  } else {
-    const i = state.stuck;
-    state.capExtreme = Math.max(state.capExtreme, state.capDir * e.x);
-    const turnedBack = state.capExtreme - state.capDir * e.x > TURN_BACK * p.h;
-    if (turnedBack) {
-      release();
-    } else if (d[i] > MAX_PULL) {
-      let next = -1;
-      for (let j = 0; j < LETTERS; j++) if (j !== i && d[j] < ENTER && (next < 0 || d[j] < d[next])) next = j;
-      if (next >= 0) capture(next, now);
-      else release();
+  const p = wordmarkPoint(x, y);
+  for (let i = 0; i < LETTERS; i++) {
+    const d = letterDistance(i, p.qx, p.qy, p.aspect); // + inside, in wordmark heights
+    const f = flips[i];
+    if (d < -ENTER_OUT) f.armed = true;
+    if (d > ENTER_IN && (f.armed || tap)) {
+      f.armed = false;
+      startFlip(i, now);
     }
   }
-
-  // the tendril: it leaves letter i at the edge point nearest the electron and reaches toward the electron,
-  // at most MAX_PULL out. If the electron is inside the letter there is nothing to pull.
-  const b = state.blob;
-  const i = state.stuck >= 0 ? state.stuck : b.letter;
-  const eps = 0.02 * p.h;
-  const gx = distances(e.x + eps, e.y).d[i] - distances(e.x - eps, e.y).d[i];
-  const gy = distances(e.x, e.y + eps).d[i] - distances(e.x, e.y - eps).d[i];
-  const gl = Math.hypot(gx, gy) || 1;
-  const di = d[i];
-  const ax = e.x - (gx / gl) * di * p.h;
-  const ay = e.y - (gy / gl) * di * p.h;
-  const reach = Math.min(Math.max(di, 0), MAX_PULL) * p.h;
-  b.want = state.stuck >= 0 && di > 0.03 ? 1 : 0;
-  return {
-    ax,
-    ay,
-    tx: b.want ? ax + (gx / gl) * reach : ax, // after a release the tip springs back into the edge
-    ty: b.want ? ay + (gy / gl) * reach : ay,
-  };
 }
 
-// one semi-implicit step of a damped spring: o[k] moves toward target, o[v] is its velocity.
-// [ω, ζ]: ζ = 1 is critically damped (fastest without overshoot), below 1 it swings a little past.
-// Sub-stepped at ≤ 8 ms so stiff springs stay stable at 30 fps (and after a dropped frame).
+// One semi-implicit step of a damped spring: o[k] moves toward target, o[v] is its velocity. [ω, ζ]: ζ = 1 is
+// critically damped. Sub-stepped at ≤ 8 ms so it stays stable at 30 fps and after a dropped frame.
 function spring(o, k, v, target, [w, z], dt) {
   const n = Math.ceil(dt / 0.008);
   const h = dt / n;
@@ -952,8 +872,6 @@ function setTarget(e) {
     st.x = st.tx;
     st.y = st.ty;
     st.vx = st.vy = 0;
-    state.blob.x = st.x;
-    state.blob.y = st.y;
   }
   st.on = true;
 }
@@ -964,6 +882,7 @@ window.addEventListener(
     if (e.pointerType === "touch" && e.buttons === 0) return;
     setTarget(e);
     if (!scene) fallbackFlip(e, false);
+    else enterFlips(state.e.tx, state.e.ty, performance.now(), false);
     updateHover(e.clientX, e.clientY);
   },
   { passive: true }
@@ -974,12 +893,16 @@ window.addEventListener(
     setTarget(e);
     if (!scene) return fallbackFlip(e, true);
     updateHover(e.clientX, e.clientY);
-    if (reduce || e.target.closest("a")) return;
-    // a click on the background (not a link, not inside a letter) sends a wave across the screen
+    if (reduce || e.target.closest?.("a")) return;
     const r = hero.getBoundingClientRect();
     const x = e.clientX - r.left;
     const y = e.clientY - r.top;
-    if (wordmarkSD && Math.min(...distances(x, y).d) < 0) return;
+    // a tap on a letter flips it; a click on the background sends a wave across the screen
+    const p = wordmarkPoint(x, y);
+    if (wordmarkSD && [0, 1, 2, 3, 4].some((i) => letterDistance(i, p.qx, p.qy, p.aspect) > 0)) {
+      enterFlips(x, y, performance.now(), true);
+      return;
+    }
     state.waves.push({ x, y, t0: state.time });
     state.energy = Math.max(state.energy, 0.85);
     state.stir = [x, y];
@@ -1008,7 +931,8 @@ function updateHover(x, y) {
 
 document.addEventListener("focusin", (e) => {
   const a = e.target.closest?.(".links a");
-  state.focusRect = a && a.matches(":focus-visible") ? a.getBoundingClientRect() : null;
+  const el = a && a.matches(":focus-visible") && elements.list.find((x) => x.node === a);
+  state.focusRect = el ? el.textBox || a.getBoundingClientRect() : null;
   if (reduce) {
     state.focusAmt = state.focusRect ? 1 : 0;
     scene?.draw();
@@ -1044,35 +968,15 @@ function frame(now) {
   state.time = (now - t0) / 1000;
 
   const e = state.e;
-  const eSpring = state.stuck >= 0 ? ELECTRON_STUCK : ELECTRON_SPRING;
-  spring(e, "x", "vx", e.tx, eSpring, dt);
-  spring(e, "y", "vy", e.ty, eSpring, dt);
+  spring(e, "x", "vx", e.tx, ELECTRON_SPRING, dt);
+  spring(e, "y", "vy", e.ty, ELECTRON_SPRING, dt);
   spring(e, "str", "sv", e.on ? 1 : 0, [14, 1], dt);
   e.str = clamp01(e.str);
-
   updateFlips(now);
-  const sticky = updateSticky(now);
-  const b = state.blob;
-  if (sticky && (b.want || b.str > 0.01)) {
-    if (b.str < 0.01 && b.want) {
-      // a new tendril starts from the edge, not from wherever the last one was
-      b.x = b.ax = sticky.ax;
-      b.y = b.ay = sticky.ay;
-      b.vx = b.vy = b.avx = b.avy = 0;
-    }
-    spring(b, "ax", "avx", sticky.ax, EDGE_SPRING, dt);
-    spring(b, "ay", "avy", sticky.ay, EDGE_SPRING, dt);
-    spring(b, "x", "vx", sticky.tx, BUBBLE_SPRING, dt);
-    spring(b, "y", "vy", sticky.ty, BUBBLE_SPRING, dt);
-    if (state.stuck >= 0) b.letter = state.stuck;
-  }
-  spring(b, "str", "sv", b.want ? 1 : 0, [b.want ? 9 : LET_GO, 1], dt);
-  b.str = clamp01(b.str);
 
-  // the field's energy: stirred by a moving electron, a pulled tendril and waves; it dies down slowly
-  const speed = Math.hypot(e.vx, e.vy);
-  const tip = b.str > 0.05 ? b.str * Math.min(1, Math.hypot(b.vx, b.vy) / 1200) : 0;
-  const stirNow = e.str * Math.min(1, speed / 1400) * 0.9 + tip * 0.5;
+  // the field's energy: stirred by a moving electron and by waves; it dies down slowly
+  const speed = Math.min(Math.hypot(e.vx, e.vy), MAX_SPEED);
+  const stirNow = e.str * (speed / MAX_SPEED);
   if (stirNow > state.energy * 0.5) state.stir = [e.x, e.y];
   state.energy = Math.min(1, state.energy * Math.exp(-dt / AFTERGLOW) + stirNow * dt * 2.2);
 
@@ -1113,6 +1017,8 @@ async function boot() {
       await document.fonts?.ready;
       scene.rebuildUI();
       scene.draw();
+      // one still frame, drawn again once layout and the page have fully settled
+      [120, 600, 1500].forEach((ms) => setTimeout(() => scene.draw(), ms));
     } else flipSvg();
     return;
   }
@@ -1159,3 +1065,13 @@ async function boot() {
 }
 
 boot();
+
+// ?debug exposes the live state and a field crop for scripted checks
+if (new URLSearchParams(location.search).has("debug")) {
+  window.__hero = {
+    state,
+    flips,
+    // the field as rendered, one pixel per cell, for a client-px rect (scripted visual checks)
+    crop: (x, y, w, h, zoom) => scene?.cropCells(x, y, w, h, zoom),
+  };
+}
