@@ -6,8 +6,8 @@ One screen: the **CRDZC** wordmark, centred, drawn as dots in a single dithered 
 and under each letter lies the mark of its link (envelope, LinkedIn, Dribbble, Medium, GitHub). The pointer opens the
 wordmark like a curtain and reveals the marks beneath it; left alone, the letters turn into their marks on their own
 and every 9 seconds everything converges back into CRDZC. Every change of shape is the same morph: the dots
-reorganise into the next form. The pointer is drawn as a dot with a gradient (the system cursor is hidden); a click
-on the background sends two long rings across the screen. No build step, no dependencies (native ES modules).
+walk to their places in the next form. The pointer is drawn as a dot with a gradient (the system cursor is hidden); a click
+on the background sends one long, quiet ring across the screen. No build step, no dependencies (native ES modules).
 
 ```
 index.html   the page: the wordmark as inline SVG, each letter an <a> (the real links, focus, screen readers)
@@ -58,14 +58,21 @@ Keyboard focus shows that letter's mark and a dotted underline under it until fo
   tone, so a mark is made of the same dots with the same soft edge. **Tone** (texture alpha) scales dot density (down
   to `TONE_DENS` 0.3) and brightness (down to `TONE_BRIGHT` 0.5): the envelope has a bright flap (1.0), lighter
   sides (0.4), a mid-tone bottom (0.68) and a cut-out gap along the flap. The other marks are single-tone.
-- A letter's state is one number, 0 (letter) … 1 (mark). **Every change is a morph, never a flip**: each lattice
-  site switches from the old shape to the new one at its own moment within the morph (its blue-noise rank, mixed
-  `MORPH_RIPPLE` 0.5 with a smooth spatial noise at `MORPH_NOISE` 2.2 per letter height, so the change ripples
-  through the shape); a site takes `MORPH_SOFT` 0.08 of the morph to switch and dims by `MORPH_DIP` 0.6 while it does;
-  the old shape is sampled a little ahead and the new one a little behind along a smooth flow field (up to
-  `MORPH_DRIFT` 0.05 letter heights), so the dots seem to travel into the new form. Dot size never changes and nothing
-  is scaled, so the outer letters cannot stretch. A morph takes `MORPH_MS` 900–1400 ms (cubic in-out), shorter when
-  it starts part-way; it can be retargeted mid-way without a jump.
+- A letter's state is one number, 0 (letter) … 1 (mark). **Every change is a morph in which the dots walk**: at
+  load, the dots of each letter (as mirrored) and of its mark are sampled on the dot lattice (80 rows per wordmark
+  height, the shader's own density rule), ordered along a Hilbert curve and paired by rank, a cheap approximate
+  optimal transport, so paths stay short and rarely cross; the smaller set is reused so every dot of both shapes
+  takes part (a few split or merge on the way). About 1,600 pairs per letter, ~8,200 in all (8,170 measured), built once. While a
+  letter changes, its still dots give way to these walking dots: each sets off at its own moment (`WALK_SPREAD` 0.55
+  of the morph; half random, half a smooth function of place, so the motion ripples through the shape), eases along
+  a slightly curved path (`WALK_CURVE` 0.18 of its length) with a little wander (`WALK_WOBBLE` 0.012 letter
+  heights), dims mid-way (`WALK_DIP` 0.45) and brightens on arrival, at `WALK_TONE` 0.85 of the shape's tone. Dots
+  keep their size and land back on the checkerboard lattice; in flight they may be anywhere. Over the first and last
+  `WALK_EDGE` 0.1 of a morph the walking dots and the still ones hand over to each other dot by dot. They are drawn
+  as single-cell points into their own texture, which the field pass reads, so the pointer and the focus underline
+  stay on top. Nothing is scaled, so the outer letters cannot stretch. A morph takes `MORPH_MS` 1300–1700 ms (cubic
+  in-out), shorter when it starts part-way, and can be retargeted mid-way without a jump. The same mechanism carries
+  the autonomous morphs, the convergence and the curtain.
 - The letters keep a random orientation (mirrored or not, per axis) as a static identity for the visit; it never
   animates. Marks are always upright.
 
@@ -96,8 +103,8 @@ Once nothing has touched the pointer for `IDLE_MS` (3 s), the letters run on the
 | 700–3600 (`SOLO_AT`) | each letter morphs into its mark at its own random moment |
 | +1700–2600 (`SOLO_BACK_AFTER`) | with a 50 % chance (`SOLO_BACK`) a letter morphs back on its own |
 | 6000–9600 (`PULSE_AT`, `PULSE_MS` 3600) | the convergence pulse: letters 30 % denser (`PULSE_L`), field 45 % thinner (`PULSE_THIN`) and gathered 5 % toward the wordmark (`PULSE_GATHER`), peaking at ~7.8 s |
-| 6200–6800 (`CONVERGE_AT` + `CONVERGE_STAGGER`) | every letter still showing its mark morphs back; all letters again by ~8.2 s |
-| 8200–9700 | hold: the pure wordmark around the cycle boundary |
+| 6200–6700 (`CONVERGE_AT` + `CONVERGE_STAGGER`) | every letter still showing its mark morphs back; all letters again by ~8.4 s |
+| 8400–9700 | hold: the pure wordmark around the cycle boundary |
 
 Pointer input pauses the cycle: letters showing marks morph back (the curtain shows marks where the pointer is). The
 cycle restarts from its hold 3 s after the last input, so it never jumps. A letter with keyboard focus is left alone.
@@ -130,10 +137,10 @@ cycle restarts from its hold 3 s after the last input, so it never jumps. A lett
   deflection, wake and energy respond to at most `MAX_SPEED` 2400 px/s.
 - **Frame pacing.** Every display frame on desktop (60/90/120/144 Hz; all motion is time-based); ~30 fps on touch
   devices. Nothing is allocated per frame.
-- **Waves.** A click or tap on the background (a click on a letter opens its link instead) sends two long rings
-  through everything: speed 1.05 screen heights/s, life 2.6 s with a linear decay and a 0.2 s fade-in, ring half-width
-  0.1 screen heights, push 0.018 screen heights, density swell 1.0, one trailing echo at 0.5 strength, 2.4 half-widths
-  behind the front, pushing the other way. Up to 6 overlap.
+- **Waves.** A click or tap on the background (a click on a letter opens its link instead) sends one long, quiet
+  ring through everything: speed 1.05 screen heights/s (past the farthest corner in about 2 s), life 2.6 s with a
+  linear decay and a 0.2 s fade-in, half-width 0.1 screen heights, push 0.008 screen heights (`WAVE_PUSH`), density
+  and brightness swell 0.4 (`WAVE_DENS`). No echo ring. Up to 6 overlap; none under reduced motion.
 - **Size.** The wordmark is 39 vw wide (60 vw under 700 px), fixed in the exact centre.
 
 ## Loading: a particle build-up
@@ -146,17 +153,26 @@ every site arrives (`BUILD_GAIN` 1.15) and the build ends exactly in the resting
 land around the letters too (`BUILD_SCATTER` 0.3, following the field), fading as the letters win. Each dot flashes as
 it lands and settles (`FLASH` 0.06 of the build); arrived letter dots stay. No text, no counter, no sweep.
 
-The progress follows a stepped curve, knots `[s, progress, slope]` joined by a monotone cubic (`BUILD_KNOTS`):
+The arrival rate follows Lucas's sketch (`BUILD_RATE`): segments on the normalised timeline, each `[from t, to t,
+from v, to v, shape]` with v a share of the top rate and shape linear, a decay that is fast first and flattens
+(1 − e^(−k·u)), or an abrupt jump eased over 1 % (≈ 80 ms, so nothing pops). The fill is its integral, tabulated once
+(2048 steps) and normalised so the wordmark is complete exactly at the end.
 
-| phase | time | progress | peak rate |
+| t | rate | shape | fill at the end of it |
 |---|---|---|---|
-| 1: fast random burst | 0–1.6 s | 0 → 33 % | ≈ 0.28 /s |
-| pause, stragglers trickling in | 1.6–3.0 s | 33 → 34 % | 0.007 /s |
-| 2: faster burst | 3.0–4.1 s | 34 → 66 % | ≈ 0.39 /s |
-| 3: completion, eased out | 4.1–7.1 s | 66 → 100 % | 0.2 /s → 0 |
+| 0 → 20.7 % | 0 → 100 % | linear ramp (burst 1) | 20.9 % |
+| 20.7 → 32 % | 100 → 19 % | decay, k 3 (the crash) | 30.4 % |
+| 32 → 38.7 % | 19 → 47 % | linear (a smaller bump) | 34.9 % |
+| 38.7 → 56.3 % | 47 → 22 % | decay, k 2.5 | 45.5 % |
+| 56.3 → 57.3 % | 22 → 95 % | abrupt jump (burst 2) | 46.6 % |
+| 57.3 → 76.6 % | 95 → 33 % | decay, k 2.5 | 67.0 % |
+| 76.6 → 77.7 % | 33 → 95 % | abrupt jump (burst 3) | 68.4 % |
+| 77.7 → 99.2 % | 95 → 51 % | slow decay, k 0.6 | 99.2 % |
+| 99.2 → 100 % | 51 % | the last dots land; it stops | 100 % |
 
-That is 7.1 s on a first visit (or with `?boot`); a returning visitor in the same session gets the same shape in
-`BUILD_QUICK` 2.8 s; reduced motion shows the final frame at once. The letters are links throughout.
+`BUILD_S` 8 s on a first visit (or with `?boot`); a returning visitor in the same session gets the same curve in
+`BUILD_QUICK` 2.8 s; reduced motion shows the final frame at once. The letters are links throughout. `?debug`'s
+`buildSamples()` returns v and fill at the control points (they match the table exactly).
 
 ## Fallbacks
 
@@ -177,20 +193,18 @@ trademarks of their owners and are used only to link to Lucas's own profiles. To
 ## Knobs
 
 Shader (`FIELD` / `PUSH` in `hero.js`): `DENS_L` 0.72 · `DENS_WAVE` 0.25 · `DENS_E` 0.3 · `EDGE_SOFT` 3.6 cells ·
-`EDGE_HOVER` 0.3 · `EDGE_NOISE` 2.2 · `TONE_DENS` 0.3 · `TONE_BRIGHT` 0.5 · `MORPH_RIPPLE` 0.5 · `MORPH_NOISE` 2.2 ·
-`MORPH_SOFT` 0.08 · `MORPH_DRIFT` 0.05 · `MORPH_DIP` 0.6 · `CURTAIN_BAND` 0.5 · `CURTAIN_WARP` 0.35 ·
+`EDGE_HOVER` 0.3 · `EDGE_NOISE` 2.2 · `TONE_DENS` 0.3 · `TONE_BRIGHT` 0.5 · `WALK_SPREAD` 0.55 · `WALK_CURVE` 0.18 · `WALK_WOBBLE` 0.012 · `WALK_DIP` 0.45 · `WALK_TONE` 0.85 · `WALK_EDGE` 0.1 · `CURTAIN_BAND` 0.5 · `CURTAIN_WARP` 0.35 ·
 `CURTAIN_STRETCH` 0.6 · `CURTAIN_WIDEN` 0.25 · `CURTAIN_GATHER` 0.08 · `CURTAIN_FOLD` 0.05 · `CURTAIN_BUNCH` 0.35 ·
 `PULSE_L` 0.3 · `PULSE_THIN` 0.45 · `PULSE_GATHER` 0.05 · `BUILD_CORE` 0.65 · `BUILD_CLUMP` 0.4 · `BUILD_SCATTER` 0.3 · `BUILD_GAIN` 1.15 ·
 `FLASH` 0.06 · `DOT_FADE` 0.12 · `DOT_FLOOR` 0.3 · `TONE_L` 0.97 · `TWINKLE` 0.3 · `FIELD_TINT` · `SEA_AMP` 0.9 ·
 `SEA_STIR` 4.0 · `SEA_GLOBAL` 1.2 · `SEA_SCALE` 0.3 · `SEA_SPEED` 0.05 · `SEA_RIPPLE` 0.07 · `GRAD_R` 0.6 · `GRAD_D`
 0.95 · `MOAT` 1.5 · `PUSH_AMT` 0.6 · `DEFLECT` 0.35 · `RING` 0.75 · `THIN` 0.6 · `WAKE` 0.5 · `STRETCH` 0.1 ·
-`BREATHE` 0.03 · `WAVE_SPEED` 1.05 · `WAVE_WIDTH` 0.1 · `WAVE_PUSH` 0.018 · `WAVE_DENS` 1.0 · `WAVE_ECHO` 0.5 ·
-`WAVE_GAP` 2.4.
+`BREATHE` 0.03 · `WAVE_SPEED` 1.05 · `WAVE_WIDTH` 0.1 · `WAVE_PUSH` 0.008 · `WAVE_DENS` 0.4.
 JS (top of `hero.js`): `POINTER_R` 32 px · `NUCLEUS_R` 4 px · `POINTER_SPRING` [30, 1] · `POINTER_LAG` 0.3 ·
 `AFTERGLOW` 2.8 s · `MAX_SPEED` 2400 px/s · `CURTAIN_R` 0.85 · `CURTAIN_SPRING` [10, 1] · `CURTAIN_OPEN` 10/s ·
-`CURTAIN_CLOSE` 3/s · `IDLE_MS` 3000 · `MORPH_MS` 900–1400 · `CYCLE_MS` 9000 · `SOLO_AT` 700–3600 · `SOLO_BACK` 0.5 ·
-`SOLO_BACK_AFTER` 1700–2600 · `CONVERGE_AT` 6200 · `CONVERGE_STAGGER` 600 · `PULSE_AT` 6000 · `PULSE_MS` 3600 ·
-`WAVE_LIFE` 2.6 s · `MAX_WAVES` 6 · `BUILD_KNOTS` (above) · `BUILD_QUICK` 2.8 s · `CURTAIN_FROM` 0.5 · `BRAND_H` 9.5
+`CURTAIN_CLOSE` 3/s · `IDLE_MS` 3000 · `MORPH_MS` 1300–1700 · `CYCLE_MS` 9000 · `SOLO_AT` 700–3600 · `SOLO_BACK` 0.5 ·
+`SOLO_BACK_AFTER` 1700–2600 · `CONVERGE_AT` 6200 · `CONVERGE_STAGGER` 500 · `PULSE_AT` 6000 · `PULSE_MS` 3600 ·
+`WAVE_LIFE` 2.6 s · `MAX_WAVES` 6 · `BUILD_RATE` (above) · `BUILD_S` 8 s · `BUILD_QUICK` 2.8 s · `CURTAIN_FROM` 0.5 · `BRAND_H` 9.5
 units · `BRAND_ROUND` [4, 3] texels · `ROUND_OPEN` / `ROUND_CLOSE` 17 / 9 texels. Ink `#000000`, paper `#f0efea`.
 
 Visual direction is inspired by christendijoux.com; the shader, motion and code here are original.
