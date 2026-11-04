@@ -1,7 +1,8 @@
 /* cardozo.cc — hero.
-   One screen: a dithered orb, the CRDZC wordmark as the main element, a HUD frame and mono labels.
-   Visual language borrowed in spirit (not code) from christendijoux.com: ink stage, paper type,
-   hairlines, condensed display + mono. */
+   One screen: the CRDZC wordmark, full-bleed and centred, is the whole show. In WebGL it is a lit,
+   dithered, slowly wobbling object that follows the pointer; the inline SVG underneath is the
+   fallback. Ink stage, paper type, hairlines, condensed display + mono — visual direction borrowed
+   in spirit (not code) from christendijoux.com. */
 
 @font-face {
   font-family: "Big Shoulders Display";
@@ -24,7 +25,6 @@
   --paper: #f2f2ee;
   --dim: rgba(242, 242, 238, 0.56);
   --line: rgba(242, 242, 238, 0.14);
-  --line-strong: rgba(242, 242, 238, 0.3);
 
   --font-display: "Big Shoulders Display", "Arial Narrow", Impact, sans-serif;
   --font-mono: "Geist Mono", ui-monospace, "SF Mono", Menlo, monospace;
@@ -92,22 +92,18 @@ a {
 .hero {
   position: relative;
   isolation: isolate;
-  display: grid;
-  grid-template-rows: auto 1fr auto auto;
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
   height: 100vh;
   height: 100svh;
-  min-height: 560px;
+  min-height: 520px;
   padding: calc(var(--frame) + 10px) var(--pad);
   background: var(--ink);
   overflow: hidden;
 }
 
-.hero > :not(canvas) {
-  position: relative;
-  z-index: 1;
-}
-
-.orb {
+.scene {
   position: absolute;
   inset: 0;
   z-index: 0;
@@ -119,34 +115,23 @@ a {
   transition: opacity 1.2s ease;
 }
 
-.gl .orb {
+.gl .scene {
   opacity: 1;
 }
 
-/* faint dot grid, fading away from the orb */
-.dots {
-  position: absolute !important;
-  inset: 0;
-  z-index: 0 !important;
-  pointer-events: none;
-  background-image: radial-gradient(circle at 1px 1px, rgba(242, 242, 238, 0.2) 1px, transparent 1.4px);
-  background-size: 28px 28px;
-  -webkit-mask-image: radial-gradient(ellipse 62% 70% at var(--ox, 68%) var(--oy, 40%), #000 0%, transparent 78%);
-  mask-image: radial-gradient(ellipse 62% 70% at var(--ox, 68%) var(--oy, 40%), #000 0%, transparent 78%);
-  transition: opacity 1.6s ease 0.4s;
-}
-
-/* HUD frame: four hairlines inset from the viewport edge */
+/* HUD frame: four hairlines inset from the viewport edge. Blended with `difference` so the line
+   inverts where the full-bleed wordmark crosses it. */
 .frame {
-  position: absolute !important;
+  position: absolute;
   inset: var(--frame);
   z-index: 1;
   pointer-events: none;
+  mix-blend-mode: difference;
 }
 
 .frame i {
   position: absolute;
-  background: var(--line-strong);
+  background: rgba(255, 255, 255, 0.3);
   transition: transform 1.3s var(--ease);
 }
 
@@ -158,6 +143,8 @@ a {
 /* ---------------------------------------------------------------- labels */
 
 .bar {
+  position: relative;
+  z-index: 2;
   display: flex;
   align-items: center;
   justify-content: space-between;
@@ -173,7 +160,10 @@ a {
 
 .bar nav {
   display: flex;
-  gap: clamp(16px, 3vw, 36px);
+  flex-wrap: wrap;
+  justify-content: space-between;
+  gap: 10px clamp(16px, 3vw, 36px);
+  width: 100%;
 }
 
 .bar a {
@@ -201,70 +191,19 @@ a {
   transform-origin: left;
 }
 
-/* ---------------------------------------------------------------- headline */
-
-.lede {
-  grid-row: 2;
-  align-self: end;
-  max-width: min(44rem, 100%);
-  margin-bottom: clamp(18px, 3.6vh, 40px);
-  font-family: var(--font-display);
-  font-size: clamp(2.1rem, 4.5vw, 4.3rem);
-  font-weight: 300;
-  line-height: 0.94;
-  letter-spacing: 0.005em;
-  text-transform: uppercase;
-}
-
-.eyebrow {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  margin-bottom: clamp(14px, 2.4vh, 26px);
-  font-family: var(--font-mono);
-  font-size: 11px;
-  font-weight: 500;
-  line-height: 1;
-  letter-spacing: 0.14em;
-  color: var(--dim);
-}
-
-.dot {
-  width: 6px;
-  height: 6px;
-  border-radius: 50%;
-  background: var(--paper);
-  animation: pulse 2.4s ease-in-out infinite;
-}
-
-.ln {
-  display: block;
-  overflow: hidden;
-  padding-block: 0.03em;
-}
-
-.ln > span {
-  display: block;
-  transition: transform 1.1s var(--ease);
-}
-
-.ln:nth-of-type(3) > span { transition-delay: 0.08s; }
-.ln:nth-of-type(4) > span { transition-delay: 0.16s; }
-.ln:nth-of-type(5) > span { transition-delay: 0.24s; }
-
-.ln--o > span {
-  font-weight: 400;
-  color: transparent;
-  -webkit-text-stroke: 1px var(--paper);
-}
-
-/* ---------------------------------------------------------------- the logo */
+/* ---------------------------------------------------------------- the logo
+   Full-bleed (no side padding) and vertically centred. The SVG is the real, accessible wordmark and
+   the no-WebGL fallback; once WebGL is running the canvas draws it instead. */
 
 .logo {
-  grid-row: 3;
-  margin: 0 0 6px;
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  z-index: 1;
+  width: clamp(250px, 52vw, 920px);
+  margin: 0;
   line-height: 0;
-  mix-blend-mode: difference; /* letters invert where they cross the lit orb */
+  transform: translate(-50%, -50%);
 }
 
 .logo svg {
@@ -272,7 +211,11 @@ a {
   width: 100%;
   height: auto;
   overflow: hidden;
-  fill: #fff;
+  fill: var(--paper);
+}
+
+.gl .logo svg {
+  visibility: hidden; /* keeps its box: JS measures it to place the WebGL wordmark */
 }
 
 .logo path {
@@ -289,9 +232,10 @@ a {
 /* ---------------------------------------------------------------- boot */
 
 .boot {
-  position: absolute !important;
+  --count-size: clamp(5rem, 15vw, 13rem);
+  position: absolute;
   inset: 0;
-  z-index: 3 !important;
+  z-index: 3;
   pointer-events: none;
   display: none;
   transition: opacity 0.5s ease;
@@ -306,11 +250,7 @@ a {
   display: none !important;
 }
 
-.boot {
-  --count-size: clamp(5rem, 15vw, 13rem);
-}
-
-/* the console sits just above the counter, in the dark lower-left, clear of the orb */
+/* the console sits just above the counter, in the dark lower-left */
 .boot__log {
   position: absolute;
   left: var(--pad);
@@ -391,8 +331,6 @@ a {
 
 .js.booting .frame i:nth-child(odd) { transform: scaleX(0); }
 .js.booting .frame i:nth-child(even) { transform: scaleY(0); }
-.js.booting .dots { opacity: 0; }
-.js.booting .ln > span { transform: translateY(105%); }
 .js.booting .logo path { transform: translateY(112%); }
 .js.booting .rise { opacity: 0; transform: translateY(8px); }
 
@@ -404,20 +342,14 @@ a {
 .js.booting.framed .frame i:nth-child(odd) { transform: none; }
 .js.booting.framed .frame i:nth-child(even) { transform: none; }
 
-@keyframes pulse {
-  50% { opacity: 0.25; }
-}
-
 /* ---------------------------------------------------------------- small screens */
 
 @media (max-width: 699.98px) {
+  .logo { width: 80vw; }
   .bar { font-size: 10px; letter-spacing: 0.12em; }
-  .lede { font-size: clamp(2rem, 11.5vw, 3rem); }
-  .bar--bottom span { display: none; }
-  .bar--bottom { justify-content: flex-start; }
+  .bar nav { justify-content: flex-start; gap: 6px 20px; }
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .dot { animation: none; }
-  .frame i, .ln > span, .logo path, .rise, .orb, .dots, .boot { transition: none; }
+  .frame i, .logo path, .rise, .scene, .boot { transition: none; }
 }

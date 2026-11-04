@@ -1,12 +1,11 @@
-// cardozo.cc hero — boot sequence, dithered orb (WebGL), pointer-reactive wordmark.
-// No dependencies. Everything degrades: without WebGL the page keeps the frame, type and logo;
-// with prefers-reduced-motion it renders a single still frame and skips the boot.
+// cardozo.cc hero — the CRDZC wordmark as a dynamic, dithered, pointer-lit object (WebGL),
+// plus the boot sequence. No dependencies. Everything degrades: without WebGL the inline SVG
+// wordmark stays; with prefers-reduced-motion it renders one still frame and skips the boot.
 
 const html = document.documentElement;
 const hero = document.getElementById("hero");
-const canvas = hero.querySelector(".orb");
+const canvas = hero.querySelector(".scene");
 const logoSvg = hero.querySelector(".logo svg");
-const letters = [...hero.querySelectorAll(".lt")];
 
 const reduce = matchMedia("(prefers-reduced-motion: reduce)").matches;
 const coarse = matchMedia("(hover: none)").matches;
@@ -14,58 +13,197 @@ const coarse = matchMedia("(hover: none)").matches;
 const INK = [5 / 255, 5 / 255, 5 / 255];
 const PAPER = [242 / 255, 242 / 255, 238 / 255];
 
-const clamp01 = (v) => Math.min(1, Math.max(0, v));
+const clamp = (v, lo, hi) => Math.min(hi, Math.max(lo, v));
+const clamp01 = (v) => clamp(v, 0, 1);
 const lerp = (a, b, t) => a + (b - a) * t;
 const easeOutCubic = (t) => 1 - Math.pow(1 - t, 3);
 const easeInOutCubic = (t) => (t < 0.5 ? 4 * t * t * t : 1 - Math.pow(-2 * t + 2, 3) / 2);
 
 // ------------------------------------------------------------------ shared state
 const state = {
-  intro: reduce ? 1 : 0, // 0 → 1 : orb grows from a seed
-  pxMul: reduce ? 1 : 5, // dither cell multiplier : coarse → fine as the orb "resolves"
+  intro: reduce ? 1 : 0, // 0 → 1 : letters rise and light up, one by one
+  pxMul: reduce ? 1 : 5, // dither cell multiplier : coarse → fine as the wordmark "resolves"
   hover: 0,
-  mouse: [0.34, 0.16],
-  target: [0.34, 0.16],
+  mouse: [0.3, 0.12], // light position, -1..1 in canvas space (y up)
+  target: [0.3, 0.12],
   lastPointer: -1e9,
   inside: false,
   time: reduce ? 4 : 0,
-  orb: [0.2, 0.08, 0.28], // centre x/y and radius, in units of hero height (y up)
-  clipY: -1,
+  logo: [0, 0, 1, 1], // x, y (bottom-left), w, h of the wordmark in canvas px
+  logoCss: [0, 0, 1, 1], // left, top, w, h of the wordmark in CSS px (for hit-testing letters)
+  px: 5, // base dither cell, in canvas px
 };
 
-// Measure the free space and park the orb in it: right of the headline on landscape,
-// above the headline on portrait. Uses the real DOM, so it follows font loading and resizes.
-function layoutOrb() {
-  const hr = hero.getBoundingClientRect();
-  const W = hr.width;
-  const H = hr.height;
-  const rel = (sel) => hero.querySelector(sel).getBoundingClientRect();
-  const top = rel(".bar--top").bottom - hr.top + 6;
-  const logo = rel(".logo");
-  const logoTop = logo.top - hr.top;
+// ------------------------------------------------------------------ per-letter flips
+// Every so often a letter flips — horizontally or vertically, at random — holds for a moment, then
+// flips back. The pointer can start one too. The flip itself runs in the shader (scale through zero).
+const LETTERS = 5;
+const LETTER_EDGES = [-1, 18.55 / 90, 36.15 / 90, 54.75 / 90, 71.15 / 90, 2]; // gap midpoints, in u
+// C and D look identical flipped vertically, so they lean horizontal; R and Z are fair game
+const HORIZONTAL_BIAS = [0.8, 0.5, 0.8, 0.5, 0.8];
+const flipUniform = new Float32Array(LETTERS * 2).fill(1);
+const flips = Array.from({ length: LETTERS }, () => ({
+  mx: 1, my: 1, axis: "x", back: false, phase: "wait", t0: 0, dur: 0, until: 0, nextAt: Infinity,
+}));
+let flipsArmed = false;
+const rand = (a, b) => a + Math.random() * (b - a);
 
-  let cx, cy, r, clip;
-  if (W / H >= 1.15) {
-    const bottom = logoTop + logo.height * 0.22; // sinks slightly behind the wordmark
-    r = Math.min((bottom - top) / 2, W * 0.26);
-    cx = Math.min(W * 0.66, W - r - 40);
-    cy = (top + bottom) / 2;
-    clip = logoTop - 4; // halo and stars stay off the wordmark
-  } else {
-    const eyebrowTop = rel(".eyebrow").top - hr.top;
-    const bottom = eyebrowTop - 16;
-    r = Math.min((bottom - top) / 2, W * 0.42);
-    cx = W / 2;
-    cy = (top + bottom) / 2;
-    clip = eyebrowTop - 10; // ...and off the headline
-  }
-  state.orb = [(cx - W / 2) / H, (H / 2 - cy) / H, Math.max(r, 20) / H];
-  state.clipY = (H / 2 - clip) / H;
-  hero.style.setProperty("--ox", `${cx}px`);
-  hero.style.setProperty("--oy", `${cy}px`);
+function startFlip(i, now, back) {
+  const f = flips[i];
+  if (f.phase === "flip") return;
+  if (!back) f.axis = Math.random() < HORIZONTAL_BIAS[i] ? "x" : "y";
+  f.phase = "flip";
+  f.back = back;
+  f.t0 = now;
+  f.dur = rand(620, 900);
 }
 
-// ------------------------------------------------------------------ orb (WebGL)
+function armFlips() {
+  if (reduce || flipsArmed) return;
+  flipsArmed = true;
+  const now = performance.now();
+  flips.forEach((f, i) => {
+    f.phase = "idle";
+    f.nextAt = now + rand(1800, 4200) + i * 350;
+  });
+}
+
+function updateFlips(now) {
+  flips.forEach((f, i) => {
+    if (f.phase === "idle" && now >= f.nextAt) startFlip(i, now, false);
+    else if (f.phase === "dwell" && now >= f.until) startFlip(i, now, true);
+
+    let sx = f.mx;
+    let sy = f.my;
+    if (f.phase === "flip") {
+      const done = now - f.t0 >= f.dur;
+      const s = Math.cos(Math.PI * easeInOutCubic(clamp01((now - f.t0) / f.dur)));
+      if (f.axis === "x") sx = f.mx * s;
+      else sy = f.my * s;
+      if (done) {
+        if (f.axis === "x") f.mx *= -1;
+        else f.my *= -1;
+        sx = f.mx;
+        sy = f.my;
+        if (f.back) {
+          f.phase = "idle";
+          f.nextAt = now + rand(2600, 7000);
+        } else {
+          f.phase = "dwell";
+          f.until = now + rand(1400, 3200);
+        }
+      }
+    }
+    flipUniform[i * 2] = sx;
+    flipUniform[i * 2 + 1] = sy;
+  });
+}
+
+function letterAt(clientX, clientY) {
+  const [l, t, w, h] = state.logoCss;
+  const u = (clientX - l) / w;
+  const v = (clientY - t) / h;
+  if (u < 0 || u > 1 || v < -0.35 || v > 1.35) return -1;
+  for (let i = 0; i < LETTERS; i++) if (u >= LETTER_EDGES[i] && u < LETTER_EDGES[i + 1]) return i;
+  return -1;
+}
+
+let overLetter = -1;
+function pointerLetter(e, force) {
+  if (!flipsArmed) return;
+  const i = letterAt(e.clientX, e.clientY);
+  const entered = i !== overLetter;
+  overLetter = i;
+  if (i < 0 || !(entered || force)) return;
+  const f = flips[i];
+  const now = performance.now();
+  if (f.phase === "idle") startFlip(i, now, false);
+  else if (f.phase === "dwell") startFlip(i, now, true); // poke a flipped letter to put it back
+}
+
+// ------------------------------------------------------------------ wordmark texture
+// The SVG paths are rasterised once; from that we derive, per texel:
+//   R coverage · G height above the nearest edge (bevel) · B glow outside the letters.
+// The shader turns G into normals, so flat vector letters get a sculpted, lit surface.
+const VBW = 90;
+const VBH = 15.75;
+const TEXELS_PER_UNIT = 22;
+const MARGIN = 110; // transparent border (texels) so the outer glow fits and sampling past the edge reads 0
+const BEVEL = 46; // texels: how far in from an edge the surface keeps rising
+const GLOW = 70; // texels: reach of the outer glow
+
+function distanceTransform(mask, w, h, seed) {
+  // two-pass chamfer (3-4), returns thirds of a texel; 0 where mask === seed
+  const INF = 1e9;
+  const d = new Float32Array(w * h);
+  for (let i = 0; i < d.length; i++) d[i] = mask[i] === seed ? 0 : INF;
+  for (let y = 0; y < h; y++) {
+    for (let x = 0; x < w; x++) {
+      const i = y * w + x;
+      let v = d[i];
+      if (v === 0) continue;
+      if (x > 0) v = Math.min(v, d[i - 1] + 3);
+      if (y > 0) {
+        v = Math.min(v, d[i - w] + 3);
+        if (x > 0) v = Math.min(v, d[i - w - 1] + 4);
+        if (x < w - 1) v = Math.min(v, d[i - w + 1] + 4);
+      }
+      d[i] = v;
+    }
+  }
+  for (let y = h - 1; y >= 0; y--) {
+    for (let x = w - 1; x >= 0; x--) {
+      const i = y * w + x;
+      let v = d[i];
+      if (v === 0) continue;
+      if (x < w - 1) v = Math.min(v, d[i + 1] + 3);
+      if (y < h - 1) {
+        v = Math.min(v, d[i + w] + 3);
+        if (x < w - 1) v = Math.min(v, d[i + w + 1] + 4);
+        if (x > 0) v = Math.min(v, d[i + w - 1] + 4);
+      }
+      d[i] = v;
+    }
+  }
+  return d;
+}
+
+function buildWordmarkTexture() {
+  const cw = Math.round(VBW * TEXELS_PER_UNIT);
+  const ch = Math.round(VBH * TEXELS_PER_UNIT);
+  const tw = cw + MARGIN * 2;
+  const th = ch + MARGIN * 2;
+
+  const c = document.createElement("canvas");
+  c.width = tw;
+  c.height = th;
+  const ctx = c.getContext("2d", { willReadFrequently: true });
+  ctx.fillStyle = "#000";
+  ctx.fillRect(0, 0, tw, th);
+  ctx.translate(MARGIN, MARGIN);
+  ctx.scale(TEXELS_PER_UNIT, TEXELS_PER_UNIT);
+  ctx.fillStyle = "#fff";
+  logoSvg.querySelectorAll("path").forEach((p) => ctx.fill(new Path2D(p.getAttribute("d"))));
+
+  const rgba = ctx.getImageData(0, 0, tw, th).data;
+  const n = tw * th;
+  const solid = new Uint8Array(n);
+  for (let i = 0; i < n; i++) solid[i] = rgba[i * 4] > 127 ? 1 : 0;
+
+  const inside = distanceTransform(solid, tw, th, 0); // distance of letter texels to the nearest outside texel
+  const outside = distanceTransform(solid, tw, th, 1); // distance of outside texels to the nearest letter texel
+
+  const data = new Uint8Array(n * 4);
+  for (let i = 0; i < n; i++) {
+    data[i * 4] = rgba[i * 4];
+    data[i * 4 + 1] = Math.round(clamp01(inside[i] / 3 / BEVEL) * 255);
+    data[i * 4 + 2] = Math.round(clamp01(1 - outside[i] / 3 / GLOW) * 255);
+    data[i * 4 + 3] = 255;
+  }
+  return { data, tw, th, cw, ch };
+}
+
+// ------------------------------------------------------------------ shader
 const VERT = `
 attribute vec2 position;
 void main() { gl_Position = vec4(position, 0.0, 1.0); }
@@ -80,11 +218,15 @@ uniform vec2  uMouse;
 uniform float uHover;
 uniform float uIntro;
 uniform float uPx;
-uniform vec3  uOrb;
-uniform float uClipY;
+uniform vec4  uLogo;      // x, y (bottom-left), w, h of the wordmark, in canvas px
+uniform vec2  uTexScale;  // content size / texture size
+uniform vec2  uTexOff;    // margin / texture size
+uniform vec2  uTexSize;
+uniform vec2  uFlip[5];   // per letter: horizontal / vertical scale (-1..1, 0 = edge-on mid-flip)
 uniform vec3  uInk;
 uniform vec3  uPaper;
 uniform sampler2D uBayer;
+uniform sampler2D uMask;
 
 float hash(vec3 p) {
   return fract(sin(dot(p, vec3(127.1, 311.7, 74.7))) * 43758.5453123);
@@ -97,7 +239,7 @@ float vnoise(vec3 x) {
   vec3 i = floor(x);
   vec3 f = fract(x);
   f = f * f * (3.0 - 2.0 * f);
-  float a = mix(hash(i),                    hash(i + vec3(1.0, 0.0, 0.0)), f.x);
+  float a = mix(hash(i),                       hash(i + vec3(1.0, 0.0, 0.0)), f.x);
   float b = mix(hash(i + vec3(0.0, 1.0, 0.0)), hash(i + vec3(1.0, 1.0, 0.0)), f.x);
   float c = mix(hash(i + vec3(0.0, 0.0, 1.0)), hash(i + vec3(1.0, 0.0, 1.0)), f.x);
   float d = mix(hash(i + vec3(0.0, 1.0, 1.0)), hash(i + vec3(1.0, 1.0, 1.0)), f.x);
@@ -108,83 +250,125 @@ float fbm(vec3 p) {
   return vnoise(p) * 0.65 + vnoise(p * 2.3 + 7.1) * 0.35;
 }
 
-mat2 rot(float a) {
-  float c = cos(a), s = sin(a);
-  return mat2(c, -s, s, c);
+// which of the five letters this x belongs to (C R D Z C), from their bounding boxes
+float letterIndex(float u) {
+  return step(18.55 / 90.0, u) + step(36.15 / 90.0, u) + step(54.75 / 90.0, u) + step(71.15 / 90.0, u);
 }
 
-// surface texture, in the orb's own (rotating) space
-float field(vec3 n, float ay, float ax, float t) {
-  vec3 q = n;
-  q.xz = rot(ay) * q.xz;
-  q.yz = rot(ax) * q.yz;
-  return fbm(q * 1.7 + vec3(0.0, 0.0, t * 0.16));
+// visual centre of each letter (u along the wordmark) and the gap midpoints that bound it
+float letterCenter(float li) {
+  if (li < 0.5) return 8.9 / 90.0;
+  if (li < 1.5) return 27.35 / 90.0;
+  if (li < 2.5) return 45.45 / 90.0;
+  if (li < 3.5) return 62.95 / 90.0;
+  return 80.8 / 90.0;
+}
+vec2 letterBounds(float li) {
+  if (li < 0.5) return vec2(-1.0, 18.55 / 90.0);
+  if (li < 1.5) return vec2(18.55 / 90.0, 36.15 / 90.0);
+  if (li < 2.5) return vec2(36.15 / 90.0, 54.75 / 90.0);
+  if (li < 3.5) return vec2(54.75 / 90.0, 71.15 / 90.0);
+  return vec2(71.15 / 90.0, 2.0);
+}
+vec2 flipFor(float li) {
+  vec2 f = vec2(1.0);
+  for (int i = 0; i < 5; i++) {
+    if (abs(float(i) - li) < 0.5) f = uFlip[i];
+  }
+  // never exactly zero: the letter collapses to a hairline instead of dividing by zero
+  return vec2(f.x < 0.0 ? min(f.x, -0.02) : max(f.x, 0.02), f.y < 0.0 ? min(f.y, -0.02) : max(f.y, 0.02));
+}
+
+vec4 maskAt(vec2 tc) {
+  float inside = step(0.0, tc.x) * step(tc.x, 1.0) * step(0.0, tc.y) * step(tc.y, 1.0);
+  return texture2D(uMask, tc) * inside;
 }
 
 void main() {
   vec2 frag = gl_FragCoord.xy;
 
-  // lens: the dither grid gets finer around the pointer
+  // lens: the dither grid gets finer around the light / pointer
   vec2 mpx = (uMouse * 0.5 + 0.5) * uRes;
   float dm = length(frag - mpx) / uRes.y;
-  float k = smoothstep(0.03, 0.24, dm / (0.45 + uHover * 0.55));
+  float k = smoothstep(0.03, 0.26, dm / (0.45 + uHover * 0.55));
   float px = max(1.0, floor(uPx * mix(0.4, 1.0, k)));
 
   vec2 cell = floor(frag / px);
   vec2 c = (cell + 0.5) * px;
 
-  float aspect = uRes.x / uRes.y;
-  vec2 uv = (c - 0.5 * uRes) / uRes.y;
+  // wordmark space: u along it, v up, and a copy in units of the wordmark's height
+  vec2 q0 = (c - uLogo.xy) / uLogo.zw;
+  float aspect = uLogo.z / uLogo.w;
+  vec2 qa0 = vec2(q0.x * aspect, q0.y);
 
-  // placement comes from the page layout (JS measures the free space): xy = centre, z = radius
-  vec2 oc = uOrb.xy;
-  float R0 = uOrb.z;
-  float R  = mix(0.02, R0, uIntro);
+  // the whole wordmark breathes: slow noise bends the sampling, and bends more right under the light
+  float amp = 0.02 + 0.04 * uHover * exp(-dm * 5.0);
+  vec2 wob = vec2(
+    vnoise(vec3(qa0 * 2.1, uTime * 0.33)),
+    vnoise(vec3(qa0 * 2.1 + vec2(7.3, 2.9), uTime * 0.29))
+  ) - 0.5;
+  vec2 q = q0 + vec2(wob.x * amp / aspect, wob.y * amp) * 2.0;
 
-  vec2 p = uv - oc;
-  float r = length(p);
-  float ang = atan(p.y, p.x);
+  float li = letterIndex(q.x);
 
-  // organic silhouette
-  float wob = vnoise(vec3(cos(ang) * 1.4, sin(ang) * 1.4, uTime * 0.22)) - 0.5;
-  float edge = R * (1.0 + 0.16 * wob * (0.55 + uHover * 0.8));
+  // each letter can flip, horizontally or vertically, around its own centre
+  vec2 fs = flipFor(li);
+  float cu = letterCenter(li);
+  vec2 qf = vec2(cu + (q.x - cu) / fs.x, 0.5 + (q.y - 0.5) / fs.y);
+  vec2 bnd = letterBounds(li);
+  float inBox = step(bnd.x, qf.x) * step(qf.x, bnd.y) * step(-0.02, qf.y) * step(qf.y, 1.02);
 
-  float lum = 0.0;
+  // entrance: each letter rises out of the bottom edge, one after the other
+  float e = clamp(uIntro * 1.7 - li * 0.14, 0.0, 1.0);
+  e = 1.0 - pow(1.0 - e, 3.0);
+  float clip = mix(step(0.0, q0.y), 1.0, e);
+  vec2 rise = vec2(0.0, 1.0 - e);
 
-  if (r < edge) {
-    float z = sqrt(max(0.0, 1.0 - (r / edge) * (r / edge)));
-    vec3 n = vec3(p / edge, z);
+  vec2 tcL = (qf + rise) * uTexScale + uTexOff; // the letter itself (flipped)
+  vec2 tcG = (q + rise) * uTexScale + uTexOff;  // the halo around the wordmark (not flipped)
+  vec4 t = maskAt(tcL);
+  float cov = smoothstep(0.35, 0.65, t.r) * inBox * clip;
+  float hgt = t.g;
+  float glow = pow(maskAt(tcG).b, 2.4) * clip * (0.5 + 0.5 * abs(fs.x * fs.y));
 
-    float ay = uTime * 0.12 + uMouse.x * 0.9;
-    float ax = uMouse.y * 0.5 - 0.2;
+  // a gentle bevel, mirrored along with the letter
+  vec2 d = 2.0 / uTexSize;
+  float hr = smoothstep(0.0, 1.0, maskAt(tcL + vec2(d.x, 0.0)).g);
+  float hl = smoothstep(0.0, 1.0, maskAt(tcL - vec2(d.x, 0.0)).g);
+  float hu = smoothstep(0.0, 1.0, maskAt(tcL + vec2(0.0, d.y)).g);
+  float hd = smoothstep(0.0, 1.0, maskAt(tcL - vec2(0.0, d.y)).g);
+  vec3 n = normalize(vec3(-(hr - hl) * 6.0 * sign(fs.x), -(hu - hd) * 6.0 * sign(fs.y), 1.0));
 
-    float e = 0.1;
-    float b0 = field(n, ay, ax, uTime);
-    vec3 grad = vec3(
-      field(n + vec3(e, 0.0, 0.0), ay, ax, uTime) - b0,
-      field(n + vec3(0.0, e, 0.0), ay, ax, uTime) - b0,
-      field(n + vec3(0.0, 0.0, e), ay, ax, uTime) - b0
-    ) / e;
-    vec3 nb = normalize(n - grad * (0.42 + uHover * 0.3));
+  vec2 qa = vec2(q.x * aspect, q.y);
+  float nz = fbm(vec3(qa * 2.6, uTime * 0.12));
 
-    vec3 l = normalize(vec3(uMouse.x * 1.2 - 0.35, uMouse.y * 1.0 + 0.55, 0.85));
-    float diff = max(dot(nb, l), 0.0);
-    float rim  = pow(1.0 - max(n.z, 0.0), 3.0);
-    float band = 0.06 * sin(dot(n, vec3(9.0, 7.0, 5.0)) + uTime * 0.6);
+  // light: a point light follows the pointer. The letters stay flat and mostly solid;
+  // the light only decides how much of the dither shows through.
+  vec2 lpq = (mpx - uLogo.xy) / uLogo.zw;
+  vec3 lp = vec3(lpq.x * aspect, lpq.y, 0.55);
+  vec3 L = lp - vec3(qa, 0.0);
+  float dist = length(L);
+  float att = 1.0 / (1.0 + 2.4 * dist * dist);
+  float pl = max(dot(n, L / dist), 0.0) * att;
+  float keyL = max(dot(n, normalize(vec3(-0.45, 0.65, 0.62))), 0.0);
+  float rim = pow(1.0 - hgt, 2.0);
+  float lit = clamp(att * 1.5 + pl * 0.8, 0.0, 1.0);
+  float lumL = (mix(0.94, 1.06, lit) + 0.03 * keyL - 0.06 * rim) * (0.97 + 0.06 * nz);
 
-    lum = 0.05 + diff * 0.82 + rim * 0.3 + band;
-  } else {
-    // halo + a sparse, twinkling star field, all through the same dither
-    float halo = max(0.0, 0.17 * exp(-r * 3.2) - 0.045);
-    float star = step(0.9975, hash2(cell));
-    float tw = 0.5 + 0.5 * sin(uTime * 2.0 + cell.x * 0.7);
-    // keep specks off the type (and off the wordmark, where the difference blend would turn them into dark flecks)
-    float clear = smoothstep(uClipY - 0.05, uClipY + 0.02, uv.y);
-    lum = (halo + star * 0.55 * tw) * uIntro * clear;
-  }
+  // outside the letters: a dithered halo hugging them, and a field of dots across the WHOLE screen that
+  // wakes up around the pointer (or around the idle light) and burns brighter while you hover
+  float edgeFade = smoothstep(0.0, 0.1, min(frag.y, uRes.y - frag.y) / uRes.y); // a touch calmer behind the labels
+  float field = 0.026 + 0.018 * fbm(vec3(c / uRes.y * 3.2, uTime * 0.1));
+  float near = exp(-dm * dm * 26.0);
+  float lumB = glow * (0.12 + 0.55 * att) + field * (0.3 + 0.7 * edgeFade) + (0.08 + 0.26 * uHover) * near * (0.55 + 0.45 * edgeFade);
+  float star = step(0.9975, hash2(cell));
+  float tw = 0.5 + 0.5 * sin(uTime * 2.0 + cell.x * 0.7);
+  lumB += star * 0.5 * tw;
+
+  float lum = mix(lumB, lumL, cov);
 
   float threshold = texture2D(uBayer, (mod(cell, 8.0) + 0.5) / 8.0).r;
-  float on = step(threshold, clamp(lum, 0.0, 1.0) * 0.98);
+  float on = step(threshold, clamp(lum, 0.0, 1.0));
   gl_FragColor = vec4(mix(uInk, uPaper, on), 1.0);
 }
 `;
@@ -209,7 +393,7 @@ function bayerBytes(size) {
   return new Uint8Array(m.flat().map((v) => Math.round(((v + 0.5) / n) * 255)));
 }
 
-function createOrb() {
+function createScene() {
   const gl = canvas.getContext("webgl", { antialias: false, alpha: false, powerPreference: "high-performance" });
   if (!gl) return null;
 
@@ -238,28 +422,42 @@ function createOrb() {
   gl.enableVertexAttribArray(loc);
   gl.vertexAttribPointer(loc, 2, gl.FLOAT, false, 0, 0);
 
-  // 8×8 Bayer threshold map
-  const tex = gl.createTexture();
-  gl.activeTexture(gl.TEXTURE0);
-  gl.bindTexture(gl.TEXTURE_2D, tex);
-  gl.pixelStorei(gl.UNPACK_ALIGNMENT, 1);
-  gl.texImage2D(gl.TEXTURE_2D, 0, gl.LUMINANCE, 8, 8, 0, gl.LUMINANCE, gl.UNSIGNED_BYTE, bayerBytes(8));
-  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.NEAREST);
-  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST);
+  const setTex = (unit, w, h, format, pixels, filter, flip) => {
+    const t = gl.createTexture();
+    gl.activeTexture(gl.TEXTURE0 + unit);
+    gl.bindTexture(gl.TEXTURE_2D, t);
+    gl.pixelStorei(gl.UNPACK_ALIGNMENT, format === gl.LUMINANCE ? 1 : 4);
+    gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, flip);
+    gl.texImage2D(gl.TEXTURE_2D, 0, format, w, h, 0, format, gl.UNSIGNED_BYTE, pixels);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, filter);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, filter);
+    return t;
+  };
+
+  // unit 0: 8×8 Bayer threshold map (repeats) · unit 1: the wordmark (clamped)
+  setTex(0, 8, 8, gl.LUMINANCE, bayerBytes(8), gl.NEAREST, false);
   gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.REPEAT);
   gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.REPEAT);
+
+  const wm = buildWordmarkTexture();
+  setTex(1, wm.tw, wm.th, gl.RGBA, wm.data, gl.LINEAR, true);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
 
   const u = (name) => gl.getUniformLocation(prog, name);
   const U = {
     res: u("uRes"), time: u("uTime"), mouse: u("uMouse"), hover: u("uHover"),
-    intro: u("uIntro"), px: u("uPx"), orb: u("uOrb"), clipY: u("uClipY"),
+    intro: u("uIntro"), px: u("uPx"), logo: u("uLogo"), flip: u("uFlip[0]"),
   };
   gl.uniform3fv(u("uInk"), INK);
   gl.uniform3fv(u("uPaper"), PAPER);
   gl.uniform1i(u("uBayer"), 0);
+  gl.uniform1i(u("uMask"), 1);
+  gl.uniform2f(u("uTexScale"), wm.cw / wm.tw, wm.ch / wm.th);
+  gl.uniform2f(u("uTexOff"), MARGIN / wm.tw, MARGIN / wm.th);
+  gl.uniform2f(u("uTexSize"), wm.tw, wm.th);
 
   const dpr = Math.min(window.devicePixelRatio || 1, coarse ? 1 : 1.5);
-  const basePx = (coarse ? 4 : 5) * dpr;
 
   const resize = () => {
     const { width, height } = canvas.getBoundingClientRect();
@@ -267,10 +465,17 @@ function createOrb() {
     canvas.height = Math.max(1, Math.round(height * dpr));
     gl.viewport(0, 0, canvas.width, canvas.height);
     gl.uniform2f(U.res, canvas.width, canvas.height);
+
+    // park the WebGL wordmark exactly where the SVG sits (full-bleed, centred)
+    const hr = canvas.getBoundingClientRect();
+    const r = logoSvg.getBoundingClientRect();
+    state.logo = [(r.left - hr.left) * dpr, (hr.bottom - r.bottom) * dpr, r.width * dpr, r.height * dpr];
+    state.logoCss = [r.left, r.top, r.width, r.height];
+    state.px = clamp(r.height / 30, 2, 6.5) * dpr; // ~30 cells tall, whatever the screen
   };
   new ResizeObserver(() => {
     resize();
-    draw();
+    if (reduce) draw();
   }).observe(canvas);
   resize();
 
@@ -279,9 +484,9 @@ function createOrb() {
     gl.uniform2f(U.mouse, state.mouse[0], state.mouse[1]);
     gl.uniform1f(U.hover, state.hover);
     gl.uniform1f(U.intro, state.intro);
-    gl.uniform1f(U.px, basePx * state.pxMul);
-    gl.uniform3f(U.orb, state.orb[0], state.orb[1], state.orb[2]);
-    gl.uniform1f(U.clipY, state.clipY);
+    gl.uniform1f(U.px, state.px * state.pxMul);
+    gl.uniform4f(U.logo, state.logo[0], state.logo[1], state.logo[2], state.logo[3]);
+    gl.uniform2fv(U.flip, flipUniform);
     gl.drawArrays(gl.TRIANGLES, 0, 3);
   }
 
@@ -302,61 +507,18 @@ window.addEventListener(
     state.target[1] = -(((e.clientY - r.top) / r.height) * 2 - 1);
     state.lastPointer = performance.now();
     state.inside = true;
-    pointerLogo(e);
+    pointerLetter(e, false);
   },
   { passive: true }
 );
+window.addEventListener("pointerdown", (e) => pointerLetter(e, true), { passive: true }); // taps flip letters on touch screens
 html.addEventListener("pointerleave", () => {
   state.inside = false;
-  logoWave.mx = null;
 });
-
-// ------------------------------------------------------------------ wordmark wave
-// Letters lift softly toward the pointer (and breathe a little when idle).
-const logoWave = { mx: null, strength: 0, lifts: letters.map(() => 0), centers: [] };
-
-function measureLetters() {
-  logoWave.centers = letters.map((g) => {
-    const b = g.getBBox();
-    return b.x + b.width / 2;
-  });
-}
-measureLetters();
-
-function pointerLogo(e) {
-  const r = logoSvg.getBoundingClientRect();
-  logoWave.mx = ((e.clientX - r.left) / r.width) * 90;
-  const dy = Math.abs(e.clientY - (r.top + r.height / 2));
-  logoWave.strength = clamp01(1 - dy / (hero.clientHeight * 0.55));
-}
-
-function updateLogo(t, k = 0.1) {
-  letters.forEach((g, i) => {
-    let target = 0;
-    if (logoWave.mx !== null) {
-      const d = logoWave.centers[i] - logoWave.mx;
-      target = -0.62 * logoWave.strength * Math.exp(-(d * d) / (2 * 13 * 13));
-    }
-    if (!reduce) target += -0.07 * (0.5 + 0.5 * Math.sin(t * 0.9 + i * 0.95));
-    logoWave.lifts[i] = lerp(logoWave.lifts[i], target, k);
-    g.setAttribute("transform", `translate(0 ${logoWave.lifts[i].toFixed(3)})`);
-  });
-}
 
 // ------------------------------------------------------------------ loop
-const orb = createOrb();
-if (orb) html.classList.add("gl");
-
-layoutOrb();
-new ResizeObserver(() => {
-  layoutOrb();
-  measureLetters();
-  if (reduce) orb?.draw();
-}).observe(hero);
-document.fonts?.ready.then(() => {
-  layoutOrb();
-  measureLetters();
-});
+const scene = createScene();
+if (scene) html.classList.add("gl");
 
 let visible = true;
 new IntersectionObserver(([en]) => (visible = en.isIntersecting)).observe(hero);
@@ -375,16 +537,16 @@ function frame(now) {
   // easing that feels the same at 60 and 120 Hz
   const ease = (rate) => 1 - Math.pow(1 - rate, Math.min(dt, 100) / 16.67);
 
-  // when nobody is steering, the orb slowly looks around by itself
+  // when nobody is steering, the light sweeps slowly back and forth across the wordmark
   const idle = now - state.lastPointer > 2600;
-  const tx = idle ? 0.34 + 0.3 * Math.sin(state.time * 0.23) : state.target[0];
-  const ty = idle ? 0.14 + 0.2 * Math.cos(state.time * 0.19) : state.target[1];
-  state.mouse[0] += ease(0.06) * (tx - state.mouse[0]);
-  state.mouse[1] += ease(0.06) * (ty - state.mouse[1]);
+  const tx = idle ? 0.78 * Math.sin(state.time * 0.3) : state.target[0];
+  const ty = idle ? 0.06 * Math.cos(state.time * 0.23) : state.target[1];
+  state.mouse[0] += ease(0.07) * (tx - state.mouse[0]);
+  state.mouse[1] += ease(0.07) * (ty - state.mouse[1]);
   state.hover += ease(0.04) * ((state.inside && !idle ? 1 : 0) - state.hover);
 
-  orb?.draw();
-  updateLogo(state.time, ease(0.1));
+  updateFlips(now);
+  scene?.draw();
 }
 
 // ------------------------------------------------------------------ boot sequence
@@ -399,6 +561,7 @@ function tween(ms, fn) {
     requestAnimationFrame(step);
   });
 }
+const wait = (ms) => new Promise((r) => setTimeout(r, ms));
 
 const seen = (() => {
   try {
@@ -412,22 +575,22 @@ const forced = new URLSearchParams(location.search).has("boot");
 async function boot() {
   if (reduce) {
     html.classList.add("ready");
-    orb?.draw();
-    updateLogo(0);
+    scene?.draw();
     return;
   }
 
   requestAnimationFrame(frame);
 
   if (seen && !forced) {
-    // returning visitor: skip the console, keep the settle-in
+    // returning visitor: skip the console, keep the entrance
     html.classList.add("quick", "framed");
-    await tween(900, (t) => {
-      state.intro = easeOutCubic(t);
+    await tween(1300, (t) => {
+      state.intro = t;
       state.pxMul = lerp(3, 1, easeOutCubic(t));
     });
     html.classList.remove("booting");
     html.classList.add("ready");
+    armFlips();
     return;
   }
 
@@ -438,18 +601,25 @@ async function boot() {
   html.classList.add("framed");
   lines.forEach((li, i) => setTimeout(() => li.classList.add("on"), 250 + i * 380));
 
-  await tween(2000, (t) => {
+  // the counter runs; just before it lands, the wordmark starts to rise and resolve
+  const counter = tween(2000, (t) => {
     const e = easeInOutCubic(t);
     count.textContent = String(Math.round(e * 100)).padStart(3, "0");
     bar.style.transform = `scaleX(${e})`;
-    state.intro = easeOutCubic(clamp01(t * 1.05));
-    state.pxMul = lerp(5, 1, easeOutCubic(t));
   });
+  const entrance = wait(1500).then(() =>
+    tween(1800, (t) => {
+      state.intro = t;
+      state.pxMul = lerp(4.5, 1, easeOutCubic(t));
+    })
+  );
 
+  await counter;
   html.classList.add("boot-done");
-  await new Promise((r) => setTimeout(r, 260));
+  await Promise.all([entrance, wait(260)]);
   html.classList.remove("booting");
   html.classList.add("ready");
+  armFlips();
 
   try {
     sessionStorage.setItem("cc-boot", "1");
