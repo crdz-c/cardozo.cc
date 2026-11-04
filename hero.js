@@ -673,6 +673,8 @@ function createScene() {
   let cells = [1, 1];
   let dev = [1, 1];
   let hr = hero.getBoundingClientRect();
+  let ready = false; // set once everything below exists; until then nothing draws
+  const waveData = new Float32Array(16);
 
   function rebuildUI() {
     rasterise(elements.list, uiCanvas, hero, dpr, CELL / dpr);
@@ -681,7 +683,7 @@ function createScene() {
     gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, true);
     gl.pixelStorei(gl.UNPACK_PREMULTIPLY_ALPHA_WEBGL, false);
     gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, uiCanvas);
-    if (reduce) draw();
+    if (reduce && ready) draw();
   }
 
   function resize() {
@@ -707,7 +709,7 @@ function createScene() {
     cancelAnimationFrame(pending);
     pending = requestAnimationFrame(() => {
       resize();
-      if (reduce) draw();
+      if (reduce && ready) draw();
     });
   }).observe(hero);
   resize();
@@ -720,7 +722,6 @@ function createScene() {
     const [x1, y1] = toDev(r.right, r.top);
     return [x0, y0, x1, y1];
   };
-  const waveData = new Float32Array(16);
 
   function setCommon(U) {
     const e = state.e;
@@ -776,6 +777,8 @@ function createScene() {
     gl.uniform3f(UC.uE, ex, ey, state.e.str * 0.25);
     gl.drawArrays(gl.TRIANGLES, 0, 3);
   }
+
+  ready = true;
 
   canvas.addEventListener("webglcontextlost", (e) => {
     e.preventDefault();
@@ -872,9 +875,18 @@ function updateSticky(now) {
 
 // one semi-implicit step of a damped spring: o[k] moves toward target, o[v] is its velocity.
 // [ω, ζ]: ζ = 1 is critically damped (fastest without overshoot), below 1 it swings a little past.
+// Sub-stepped at ≤ 8 ms so stiff springs stay stable at 30 fps (and after a dropped frame).
 function spring(o, k, v, target, [w, z], dt) {
-  o[v] += (w * w * (target - o[k]) - 2 * z * w * o[v]) * dt;
-  o[k] += o[v] * dt;
+  const n = Math.ceil(dt / 0.008);
+  const h = dt / n;
+  for (let i = 0; i < n; i++) {
+    o[v] += (w * w * (target - o[k]) - 2 * z * w * o[v]) * h;
+    o[k] += o[v] * h;
+  }
+  if (!Number.isFinite(o[k])) {
+    o[k] = target;
+    o[v] = 0;
+  }
 }
 
 // ------------------------------------------------------------------ pointer, clicks, focus
