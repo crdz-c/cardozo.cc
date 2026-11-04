@@ -188,15 +188,17 @@ the greys live: its dots are darker (`LIGHT_FIELD` 1.7×) and a bit denser (`LIG
 span many tones of grey against the black, and the marks keep their own tones (the envelope's flap, its sides).
 
 **The change is the loading's fill, only faster, in the very pixels the dots are made of, spreading out from the switch.**
-There is no gradient and no blocks: the progress runs the same rate curve as the build (`BUILD_RATE`, compressed into
-`THEME_MS` 1300 with a soft landing: time is warped by 1 − (1 − t)^1.8), and every cell of the field, the background
-included (one cell = one dot, 1–1.5 CSS px), flips palette when that progress passes its own rank. The rank is mostly
+There is no gradient and no blocks: the progress eases out over `THEME_MS` 1500 (`1 − (1 − t)^2.4`: quick at first, a
+long soft landing, monotone). It does not reuse the build's own rate curve: that one has abrupt bursts which, squeezed
+into a second and a half, read as stop-and-go (measured: the progress step per frame varied 16× within the run; now the
+change per frame is a smooth bell, rising, peaking mid-way and fading to zero, with the page at ~120 frames a second
+and no frame over 25 ms). Every cell of the field, the background included (one cell = one dot, 1–1.5 CSS px), flips palette when that progress passes its own rank. The rank is mostly
 the cell's distance from the switch (`THEME_SPATIAL` 0.78, normalised to the farthest corner), so the change **spreads
 outward from the button**, plus white noise per cell (`hash12` in the shader: a hash, no tile, no repeat), so the front
 is a random dissolve of pixels, not a line. (The noise first came from the 64×64 blue-noise map, which repeats every
 64 cells and whose neighbours are anti-correlated: half-way through, cells 64 apart matched 99 % of the time and read as
-a pattern. With the hash, neighbours and cells 64 apart match 50 %, as random does.) Each cell fades over a short
-window (`THEME_SOFT` 0.05 of the progress, roughly 100–150 ms). The density and tone rules above follow each cell, so
+a pattern. With the hash, neighbours and cells 64 apart match 50 %, as random does.) Each cell fades over a
+window of several frames (`THEME_SOFT` 0.14 of the progress: about 100 ms at the start, longer later), never a pop. The density and tone rules above follow each cell, so
 letters turn from dots to ink (or back) pixel by pixel as the front reaches them. Asked again mid-change, the running
 one lands at once and the new one starts from the button. CSS vars `--bg` / `--fg`, `theme-color` and `color-scheme`
 follow when it ends. Under reduced motion it switches at once.
@@ -257,14 +259,14 @@ Shader (`FIELD` / `PUSH` in `hero.js`): `DENS_L` 0.72 · `DENS_WAVE` 0.25 · `DE
 `SEA_STIR` 4.0 · `SEA_GLOBAL` 1.2 · `SEA_SCALE` 0.3 · `SEA_SPEED` 0.05 · `SEA_RIPPLE` 0.07 · `GRAD_R` 0.6 · `GRAD_D`
 0.95 · `MOAT` 1.5 · `PUSH_AMT` 0.6 · `DEFLECT` 0.35 · `RING` 0.75 · `THIN` 0.6 · `WAKE` 0.5 · `STRETCH` 0.1 ·
 `BREATHE` 0.03 · `WAVE_SPEED` 1.05 · `WAVE_WIDTH` 0.1 · `WAVE_PUSH` 0.008 · `WAVE_DENS` 0.4 · `HOLE` 0.5 · `FLICK_C` 0.8 · `FLICK_L` 0.4 ·
-`WREV_LEAD` 0.1 · `WREV_HOLD` 0.36 · `WREV_TAIL` 0.5 · `WREV_THIN` 0.65 · `WNULL_AT` 0.07 · `WNULL_W` 0.05 · `WNULL` 0.9 · `THEME_SOFT` 0.05 · `THEME_SPATIAL` 0.78 ·
+`WREV_LEAD` 0.1 · `WREV_HOLD` 0.36 · `WREV_TAIL` 0.5 · `WREV_THIN` 0.65 · `WNULL_AT` 0.07 · `WNULL_W` 0.05 · `WNULL` 0.9 · `THEME_SOFT` 0.14 · `THEME_SPATIAL` 0.78 ·
 `LIGHT_INK` 0.7 · `LIGHT_FIELD` 1.7 · `LIGHT_FIELD_DENS` 1.35 · `FLICK_L_INK` 0.22 · `LIGHT_SOFT` 0.08 · `LIGHT_OVER` 1.25 · `LIGHT_FLASH` 0.3 · `BG_D` / `FG_D` / `BG_L` / `FG_L` (the two palettes).
 JS (top of `hero.js`): `POINTER_R` 32 px · `NUCLEUS_R` 5 px · `POINTER_SPRING` [30, 1] · `POINTER_LAG` 0.3 ·
 `AFTERGLOW` 2.8 s · `MAX_SPEED` 2400 px/s · `CURTAIN_R` 0.85 · `CURTAIN_SPRING` [16, 1] · `REPEL_OPEN` [7, 0.8] · `REPEL_CLOSE` [3.2, 1] · `CURTAIN_OPEN` 10/s ·
 `CURTAIN_CLOSE` 3/s · `IDLE_MS` 3000 · `MORPH_MS` 900–1300 · `CYCLE_MS` 9000 · `SOLO_AT` 700–3600 · `SOLO_BACK` 0.5 ·
 `SOLO_BACK_AFTER` 1700–2600 · `CONVERGE_AT` 6200 · `CONVERGE_STAGGER` 500 · `PULSE_AT` 6000 · `PULSE_MS` 3600 ·
 `WAVE_LIFE` 3.2 s · `WAVE_PULSES` 2 · `WAVE_PULSE_GAP` 0.2 s · `WAVE_PULSE_DECAY` 0.15 · `MAX_WAVES` 8 · `ICON_R` 11 px · `ICON_IN_MS` 700 ·
-`THEME_MS` 1300 · `BUILD_RATE` (above) · `BUILD_S` 8 s · `BUILD_QUICK` 2.8 s · `CURTAIN_FROM` 0.5 · `BRAND_H` 9.5
+`THEME_MS` 1500 · `BUILD_RATE` (above) · `BUILD_S` 8 s · `BUILD_QUICK` 2.8 s · `CURTAIN_FROM` 0.5 · `BRAND_H` 9.5
 units · `BRAND_ROUND` [4, 3] texels · `ROUND_OPEN` / `ROUND_CLOSE` 17 / 9 texels. Dark: ground `#000000`, dots `#f0efea`; light: ground `#ffffff`, dots `#000000`.
 
 Visual direction is inspired by christendijoux.com; the shader, motion and code here are original.

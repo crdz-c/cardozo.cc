@@ -76,7 +76,7 @@ const BUILD_RATE = [
 // The theme switch (top right): its icon lights in once the build is over; a change sweeps out from it, softly.
 const ICON_R = 11; // CSS px: radius of the theme switch's icon (a moon in the dark theme, a sun in the light one)
 const ICON_IN_MS = 700;
-const THEME_MS = 1300; // the theme change runs this long: the loading's fill (BUILD_RATE), only much faster, easing out at the end
+const THEME_MS = 1500; // the theme change runs this long, easing out (one smooth deceleration: no bursts, which stutter when squeezed)
 const THEME_COLOR = { dark: "#000000", light: "#ffffff" };
 const BUILD_S = 8; // s: the whole build on a first visit (or ?boot)
 const BUILD_QUICK = 2.8; // s: the whole build for a returning visitor in this session
@@ -310,11 +310,11 @@ const themeBtn = hero.querySelector(".theme");
 
 // ------------------------------------------------------------------ theme
 // Dark (true black) and light (true white). The first paint already has the right one (index.html). Switching is the
-// loading's fill, only faster, and it spreads out from the switch: the progress below runs the same rate curve as the
-// build (compressed into THEME_MS, with a soft landing), and in the shader every cell, the background included, flips
+// loading's fill, only faster, and it spreads out from the switch: the progress below eases out over THEME_MS (the
+// build's own rate curve has abrupt bursts that, squeezed into a second, read as stop-and-go), and in the shader every cell, the background included, flips
 // palette when that progress passes its own rank (mostly its distance from the switch, with random per-pixel jitter), so
 // the pixels themselves change state, at random, a front of them moving out from the button.
-const themeCurve = (t) => buildProgress(1 - Math.pow(1 - t, 1.8));
+const themeCurve = (t) => 1 - Math.pow(1 - t, 2.4); // quick at first, a long soft landing; monotone, no stop-and-go
 const theme = {
   mode: html.getAttribute("data-theme") === "light" ? "light" : "dark",
   from: 0, to: 0, // 0 dark … 1 light: the state the change leaves and the one it reaches
@@ -684,7 +684,7 @@ precision highp float;
 #define LIGHT_SOFT 0.08    // an icon dot's light-up: softness of its arrival…
 #define LIGHT_OVER 1.25    // …overshoot of the progress, so every dot has arrived by the end…
 #define LIGHT_FLASH 0.3    // …and how long an arriving dot flashes (of the progress)
-#define THEME_SOFT 0.05    // the theme change: each cell fades over this much of the progress (a short, fluid window per pixel)…
+#define THEME_SOFT 0.14    // the theme change: each cell fades over this much of the progress (about 100 ms at the start, longer later: several frames, never a pop)…
 #define THEME_SPATIAL 0.78 // …in an order that is this much its distance from the switch (spreading out), the rest random per pixel…
 #define LIGHT_INK 0.7      // light theme: letters and marks are ink, not dots: extra density, so every cell is lit…
 #define LIGHT_FIELD 1.7    // …the field's dots darken (greys of many tones, for contrast against the black)…
