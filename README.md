@@ -34,8 +34,9 @@ Open <http://localhost:8000>. The boot sequence plays once per browser session; 
 `?debug` exposes `window.__hero`: live `state`, `letters` (each letter's morph state), `cycle()` (ms into the 9 s
 cycle or `null` while paused, the pulse, each letter's amount), `crop(x, y, w, h, zoom)` (the field as rendered, one
 pixel per cell), `tick()` (advance everything to now in 16 ms steps, for scripted checks in previews that throttle
-animation frames), `buildProgress(s)` (the loading curve) and `finish()` (skip the build); also `setTheme("light" | "dark")`
-and `theme`.
+animation frames), `buildProgress(s)` (the loading curve) and `finish()` (skip the build); also `setTheme("light" | "dark")`,
+`theme`, `touchState()` (the touch gesture state), `adapt(ms)` (feed a frame time to the adaptive quality) and `quality()`.
+`?debug&dpr=3` renders as if the screen were 3× (to check a phone's resolution in a desktop browser).
 The page loads no fonts: there is no text on screen.
 
 ## Letters are links
@@ -52,13 +53,15 @@ The links live in `index.html`: each letter's `<g class="lt">` sits inside an SV
 over its column, so the whole column is clickable whatever it shows. Web links open in a new tab
 (`rel="me noopener"`); each has an `aria-label`. The mark is read from the link's URL, so **remapping is just
 reordering the `href`s** in `index.html`. Under `.gl` the SVG is `opacity: 0`, not hidden: hit-testing, keyboard
-focus (Tab, Enter) and screen readers keep working. A click or tap on a letter always opens its link, letter or mark.
+focus (Tab, Enter) and screen readers keep working. A mouse click on a letter always opens its link, letter or mark; so does Enter. On touch a first tap shows the marks and a
+tap on a revealed mark opens it (see *Touch*).
 Keyboard focus shows that letter's mark and a dotted underline under it until focus leaves.
 
 ## Letters, marks and the morph
 
 - Each letter has two shapes sharing one texture layout: the letter (the wordmark's own paths, corners rounded) and
-  its mark beneath (every mark the same height, `BRAND_H` 9.5 of the wordmark's 15.75 units, centred on the letter,
+  its mark beneath (every mark the same height, `BRAND_H` 9.5 of the wordmark's 15.75 units (11.2 when the wordmark is under 60 CSS px tall, a
+  phone's, which has fewer dots to draw it with), centred on the letter,
   narrowed only if its column is too tight). Both are stored as coverage + inside distance + outside distance +
   tone, so a mark is made of the same dots with the same soft edge. **Tone** (texture alpha) scales dot density (down
   to `TONE_DENS` 0.3) and brightness (down to `TONE_BRIGHT` 0.5): the envelope has a bright flap (1.0), lighter
@@ -84,7 +87,7 @@ the mark at its own moment (its blue-noise rank mixed `MORPH_RIPPLE` 0.5 with a 
 taking `MORPH_SOFT` 0.08 of the reveal, drifting up to `MORPH_DRIFT` 0.05 letter heights toward the new shape and
 dimming by `MORPH_DIP` 0.6 while it does. Only the part of a letter under it shows its mark. It opens at
 `CURTAIN_OPEN` 10/s and closes at `CURTAIN_CLOSE` 3/s, once the pointer leaves or rests for `IDLE_MS` 3 s; it works
-from halfway through the loading build (`CURTAIN_FROM` 0.5); on touch it follows the finger while it is down.
+from halfway through the loading build (`CURTAIN_FROM` 0.5); on touch see *Touch* below.
 
 **Oil on water.** On top of that, the surface film of dots (the letters and the field around) is pushed radially
 away from the curtain's centre along smooth flow lines, leaving a clean opening where the mark reads clearly. Material
@@ -116,8 +119,14 @@ cycle restarts from its hold 3 s after the last input, so it never jumps. A lett
 
 ## The field
 
-- **Two passes.** *Field* runs at one fragment per dither cell (≈ 1/80 of the wordmark's height, 1–1.5 CSS px, never
-  under 2 device px) into a texture; *compose* upscales it, each cell an exact square.
+- **Two passes.** *Field* runs at one fragment per dither cell (≈ 1/80 of the wordmark's height, up to 1.5 CSS px, never
+  under 2 device px) into a texture; *compose* upscales it, each cell an exact square. The cell used to be at least 1 CSS
+  px, which on a 3× phone threw its density away: the wordmark (225 CSS px wide) had 225 × 40 cells, against ~560 × 98 on a
+  1440 desktop. With the 2 device px floor a 3× phone gets 338 × 60 (0.67 CSS px cells, as sharp as a retina desktop's);
+  a 2× phone is unchanged (2 device px is already 1 CSS px). Everything defined in cells follows the wordmark's resolution:
+  the letter edge's softness and roughness (`EDGE_SOFT`, `EDGE_NOISE`) are tuned for a wordmark `EDGE_REF` 90 cells tall and
+  scale down in proportion below that (to `EDGE_MIN` 0.45), so a small wordmark's edges are not blurrier than a big
+  one's (they were 9 % of the letter's height on a phone, against ~4 %).
 - **One material.** Dots are thresholded by one 64×64 blue-noise map; letters and marks sit on a checkerboard
   lattice (dense dots never fuse), the field is free blue noise (no grid, no repeating cluster). A letter or mark is
   only where those dots gather and burn paper-white; field dots are dimmer and cooler. A dot's intensity rises
@@ -145,9 +154,12 @@ cycle restarts from its hold 3 s after the last input, so it never jumps. A lett
   (`STRETCH` 0.1). Nothing shows while the pointer is outside the window, or on touch without a finger down.
 - **Fast motion.** No segment is ever drawn between samples; springs are sub-stepped at ≤ 8 ms with `dt` ≤ 50 ms;
   deflection, wake and energy respond to at most `MAX_SPEED` 2400 px/s.
-- **Frame pacing.** Every display frame on desktop (60/90/120/144 Hz; all motion is time-based); ~30 fps on touch
-  devices. Nothing is allocated per frame.
-- **Waves.** A click or tap on the background (a click on a letter opens its link instead) sends **two pulses**
+- **Frame pacing.** Every display frame (60/90/120/144 Hz; all motion is time-based), touch included (it used to be
+  capped at ~30 fps there). **Adaptive quality:** the frame time is averaged over a few seconds; if it stays above
+  `ADAPT_MS` 26 (under ~38 fps) the dots get one device px coarser (`quality`, twice at most, `ADAPT_MAX`), the
+  wordmark keeping its shape with fewer, bigger dots; it never goes back up. A rAF throttled to 30 Hz (iOS Low Power
+  Mode) reads as slow too. Nothing is allocated per frame.
+- **Waves.** A click on the background, or a tap (a click on a letter opens its link instead; on touch, see *Touch*) sends **two pulses**
   (`WAVE_PULSES` 2, `WAVE_PULSE_GAP` 0.2 s apart, the second `WAVE_PULSE_DECAY` 0.15 weaker), each one long ring
   through everything: speed 1.05 screen heights/s, life 3.2 s with a linear decay and a 0.2 s fade-in, half-width 0.1
   screen heights, push 0.008 screen heights (`WAVE_PUSH`), density and brightness swell 0.4 (`WAVE_DENS`). Up to 8
@@ -160,6 +172,25 @@ cycle restarts from its hold 3 s after the last input, so it never jumps. A lett
   its energy-cancelling band through the marks the first one revealed, and holds them a little longer: a click 400
   px away shows the marks about half a second after it arrives, for roughly 0.6 s, and the letters re-form behind.
 - **Size.** The wordmark is 39 vw wide (60 vw under 700 px), fixed in the exact centre.
+
+## Touch
+
+A finger has no hover, so on touch the gestures differ; the layout does not. (`pointerType === "touch"`, WebGL and
+motion on; with reduced motion or no WebGL a tap simply opens the link. Mouse, pen and keyboard keep what they had.)
+
+| gesture | what happens |
+|---|---|
+| **tap the wordmark** | every letter melts into its mark and **stays** (the 9 s cycle waits); the click is swallowed, so a link is never opened before its mark was seen |
+| **tap a revealed mark** | opens that letter's link |
+| **tap anywhere else** | hides the marks if they are shown; if they are hidden, sends the two-pulse wave (which reveals them for a moment and takes them back) |
+| **press and hold** (> `HOLD_MS` 250), **or drag** (> `TOUCH_SLOP` 10 px) | the curtain comes to the finger and follows it; letting go closes it. A hold or a drag never opens a link |
+
+Details. The curtain is `TOUCH_CURTAIN` 1.9× the mouse's radius and sits `TOUCH_LIFT` 24 CSS px above the finger
+(eased in with `state.cur.tk`, 0 mouse … 1 touch), because a fingertip covers a mouse-sized disc; the mouse's ring and
+gradient are not drawn under a finger. The revealed marks hide by themselves after `REVEAL_HIDE_MS` 8 s untouched (any
+touch restarts it), and when the page is left (`visibilitychange`, e.g. after opening a link in a new tab). The marks are
+pinned the same way keyboard focus pins one (`pinned()`); `touch-action: manipulation` removes double-tap zoom (pinch still
+works) and `-webkit-touch-callout: none` the link menu a long press would open.
 
 ## How things appear
 
@@ -267,7 +298,8 @@ JS (top of `hero.js`): `POINTER_R` 32 px · `NUCLEUS_R` 5 px · `POINTER_SPRING`
 `SOLO_BACK_AFTER` 1700–2600 · `CONVERGE_AT` 6200 · `CONVERGE_STAGGER` 500 · `PULSE_AT` 6000 · `PULSE_MS` 3600 ·
 `WAVE_LIFE` 3.2 s · `WAVE_PULSES` 2 · `WAVE_PULSE_GAP` 0.2 s · `WAVE_PULSE_DECAY` 0.15 · `MAX_WAVES` 8 · `ICON_R` 11 px · `ICON_IN_MS` 700 ·
 `THEME_MS` 1500 · `BUILD_RATE` (above) · `BUILD_S` 8 s · `BUILD_QUICK` 2.8 s · `CURTAIN_FROM` 0.5 · `BRAND_H` 9.5
-units · `BRAND_ROUND` [4, 3] texels · `ROUND_OPEN` / `ROUND_CLOSE` 17 / 9 texels. Dark: ground `#000000`, dots `#f0efea`; light: ground `#ffffff`, dots `#000000`.
+units (11.2 on small wordmarks) · `EDGE_REF` 90 · `EDGE_MIN` 0.45 · `HOLD_MS` 250 · `TOUCH_SLOP` 10 px · `REVEAL_HIDE_MS` 8 s ·
+`TOUCH_CURTAIN` 1.9 · `TOUCH_LIFT` 24 px · `ADAPT_MS` 26 · `ADAPT_MAX` 2 · `BRAND_ROUND` [4, 3] texels · `ROUND_OPEN` / `ROUND_CLOSE` 17 / 9 texels. Dark: ground `#000000`, dots `#f0efea`; light: ground `#ffffff`, dots `#000000`.
 
 Visual direction is inspired by christendijoux.com; the shader, motion and code here are original.
 
