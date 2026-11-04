@@ -195,7 +195,7 @@ a {
   left: 50%;
   top: 50%;
   z-index: 1;
-  width: clamp(250px, 52vw, 920px);
+  width: clamp(190px, 39vw, 690px);
   margin: 0;
   line-height: 0;
   transform: translate(-50%, -50%);
@@ -339,10 +339,33 @@ a {
 /* ---------------------------------------------------------------- small screens */
 
 @media (max-width: 699.98px) {
-  .logo { width: 80vw; }
+  .logo { width: 60vw; }
   .bar { font-size: 10px; letter-spacing: 0.12em; }
   .links { font-size: 10px; letter-spacing: 0.12em; }
   .links a { min-height: 42px; padding: 0 12px; }
+}
+
+/* ---------------------------------------------------------------- rendered into the dots
+   With WebGL the labels and the link container are drawn by the shader (see elements.js). The DOM
+   versions stay in layout and keep working (click, keyboard, screen readers) but are visually transparent;
+   the focus ring is drawn in dots too. */
+
+.gl .bar,
+.gl .links,
+.gl .links a,
+.gl .links a:hover,
+.gl .links a:focus-visible {
+  color: transparent;
+  background: transparent;
+  border-color: transparent;
+}
+
+.gl .links a:focus-visible {
+  outline-color: transparent;
+}
+
+.gl .links a {
+  cursor: pointer;
 }
 
 @media (prefers-reduced-motion: reduce) {

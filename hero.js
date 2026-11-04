@@ -1,6 +1,11 @@
-// cardozo.cc hero — the CRDZC wordmark as a dithered, pointer-lit object (WebGL), plus the boot
-// sequence. No dependencies. Everything degrades: without WebGL the inline SVG wordmark stays; with
-// prefers-reduced-motion it renders one still frame and skips the boot.
+// cardozo.cc hero — one canvas of dots. Every element of the interface (the CRDZC wordmark, the labels,
+// the link container) is rendered *into* a single dithered dot field; the pointer is an "electron" that
+// pushes that field around and sticks to the letters; a click on the background sends a wave across it.
+// No dependencies. Everything degrades: no JS → static page; no WebGL → the SVG wordmark and the DOM
+// links; prefers-reduced-motion → one still frame (still in dots), no boot, no flips, no waves.
+
+import { distanceTransform, roundCorners, blueNoise } from "./raster.js";
+import { createElements, rasterise, hoverTargets } from "./elements.js";
 
 const html = document.documentElement;
 const hero = document.getElementById("hero");
@@ -17,31 +22,53 @@ const clamp = (v, lo, hi) => Math.min(hi, Math.max(lo, v));
 const clamp01 = (v) => clamp(v, 0, 1);
 const easeInOutCubic = (t) => (t < 0.5 ? 4 * t * t * t : 1 - Math.pow(-2 * t + 2, 3) / 2);
 const easeInOutQuart = (t) => (t < 0.5 ? 8 * t * t * t * t : 1 - Math.pow(-2 * t + 2, 4) / 2);
+const rand = (a, b) => a + Math.random() * (b - a);
+
+// ------------------------------------------------------------------ knobs (interaction, JS side)
+// Distances in wordmark heights (h). Springs: angular frequency ω (1/s) and damping ratio ζ.
+const ELECTRON_R = 22; // CSS px: radius of the electron's push
+const ELECTRON_SPRING = [34, 1]; // fast and critically damped: precise, never overshoots
+const ENTER = 0.2; // h: an electron this close to a letter's edge gets captured by it
+const MAX_PULL = 0.42; // h: how far a bubble can stretch out of its letter before it lets go or hands over
+const REARM = 1.5; // × ENTER: a released letter can capture again only after the electron got this far
+const TURN_BACK = 0.14; // h: moving this far against the capture direction is a "direction change"
+const BUBBLE_SPRING = [15, 0.55]; // the bubble's anchor: soft and a little gooey
+const WAVE_LIFE = 1.9; // s
+const MAX_WAVES = 4;
 
 // ------------------------------------------------------------------ shared state
 const state = {
   intro: reduce ? 1 : 0, // 0 → 1 : the field fills in and the letters dissolve into view
-  hover: 0, // 0 → 1 while someone is steering the light
-  light: [0, 0], // light position, CSS px in the hero (spring-driven)
-  lightVel: [0, 0], // CSS px / s
-  target: [0, 0],
-  lastPointer: -1e9,
-  inside: false,
+  ui: reduce ? 1 : 0, // 0 → 1 : the rendered UI dissolves in after the wordmark
   time: reduce ? 6 : 0,
-  logoCss: [0, 0, 1, 1], // left, top, w, h of the wordmark in CSS px (viewport)
+  logoCss: [0, 0, 1, 1], // left, top, w, h of the wordmark (client px)
+  // the electron, in hero CSS px
+  e: { x: -1e4, y: -1e4, vx: 0, vy: 0, tx: -1e4, ty: -1e4, on: false, str: 0, sv: 0 },
+  // the sticky bubble
+  stuck: -1, // letter index, or -1 when free
+  blob: { x: 0, y: 0, vx: 0, vy: 0, str: 0, sv: 0, letter: 0 },
+  capDir: 1,
+  capExtreme: 0,
+  rearm: [true, true, true, true, true],
+  hot: null, // hovered element { el, rect }
+  hotAmt: 0,
+  hotRect: [0, 0, 0, 0],
+  focusRect: null,
+  focusAmt: 0,
+  waves: [], // { x, y, t0 } in hero CSS px, seconds
 };
 
 // ------------------------------------------------------------------ per-letter flips
-// Every letter starts in a random orientation (flipped horizontally and/or vertically, or not at all).
-// After that a letter only changes when the pointer touches it (or on a tap): it flips around its own
-// centre, horizontally or vertically at random. The flip itself runs in the shader (scale through zero).
+// Every letter starts in a random orientation on every load. After that a letter flips only when the
+// electron newly captures it (horizontally or vertically at random, around its own centre).
 const LETTERS = 5;
 const LETTER_EDGES = [-1, 18.55 / 90, 36.15 / 90, 54.75 / 90, 71.15 / 90, 2]; // gap midpoints, in u
+const LETTER_CENTERS = [8.9 / 90, 27.35 / 90, 45.45 / 90, 62.95 / 90, 80.8 / 90];
 // C and D look identical flipped vertically, so they lean horizontal; R and Z are fair game
 const HORIZONTAL_BIAS = [0.8, 0.5, 0.8, 0.5, 0.8];
 const flipUniform = new Float32Array(LETTERS * 2).fill(1);
 const flips = Array.from({ length: LETTERS }, () => ({
-  mx: Math.random() < 0.5 ? 1 : -1, // random starting orientation, every load
+  mx: Math.random() < 0.5 ? 1 : -1,
   my: Math.random() < 0.5 ? 1 : -1,
   axis: "x",
   flipping: false,
@@ -50,14 +77,12 @@ const flips = Array.from({ length: LETTERS }, () => ({
 }));
 const letterGroups = [...logoSvg.querySelectorAll(".lt")];
 let flipsArmed = false;
-const rand = (a, b) => a + Math.random() * (b - a);
 
 flips.forEach((f, i) => {
   flipUniform[i * 2] = f.mx;
   flipUniform[i * 2 + 1] = f.my;
 });
 
-// no-WebGL fallback: the SVG letters follow the same state
 function flipSvg() {
   letterGroups.forEach((g, i) => {
     g.style.transform = `scale(${flipUniform[i * 2] || 0.001}, ${flipUniform[i * 2 + 1] || 0.001})`;
@@ -66,7 +91,7 @@ function flipSvg() {
 
 function startFlip(i, now) {
   const f = flips[i];
-  if (f.flipping) return;
+  if (f.flipping || reduce) return;
   f.axis = Math.random() < HORIZONTAL_BIAS[i] ? "x" : "y";
   f.flipping = true;
   f.t0 = now;
@@ -79,8 +104,7 @@ function updateFlips(now) {
     let sy = f.my;
     if (f.flipping) {
       const t = clamp01((now - f.t0) / f.dur);
-      // quart in-out: the letter leaves slowly, passes edge-on quickly, and settles softly; it never
-      // grows past its size or leaves its place
+      // quart in-out: leaves slowly, passes edge-on quickly, settles softly, never grows past its size
       const c = Math.cos(Math.PI * easeInOutQuart(t));
       if (f.axis === "x") sx = f.mx * c;
       else sy = f.my * c;
@@ -103,7 +127,8 @@ function measureLogo() {
   state.logoCss = [r.left, r.top, r.width, r.height];
 }
 
-function letterAt(clientX, clientY) {
+// no-WebGL fallback: a letter flips when the pointer enters it
+function letterColumn(clientX, clientY) {
   const [l, t, w, h] = state.logoCss;
   const u = (clientX - l) / w;
   const v = (clientY - t) / h;
@@ -111,97 +136,30 @@ function letterAt(clientX, clientY) {
   for (let i = 0; i < LETTERS; i++) if (u >= LETTER_EDGES[i] && u < LETTER_EDGES[i + 1]) return i;
   return -1;
 }
-
 let overLetter = -1;
-function pointerLetter(e, force) {
+function fallbackFlip(e, force) {
   if (!flipsArmed) return;
-  const i = letterAt(e.clientX, e.clientY);
+  const i = letterColumn(e.clientX, e.clientY);
   const entered = i !== overLetter;
   overLetter = i;
-  if (i < 0 || !(entered || force)) return;
-  startFlip(i, performance.now());
+  if (i >= 0 && (entered || force)) startFlip(i, performance.now());
 }
 
 // ------------------------------------------------------------------ wordmark texture
-// The SVG paths are rasterised once; from that we derive, per texel:
+// The SVG paths are rasterised once, their corners rounded, and per texel we store:
 //   R coverage · G distance to the edge inside a letter · B closeness to a letter outside it.
-// G and B together give the shader a signed distance to the edge, used for a soft dithered edge.
+// A CPU copy of the signed distance stays around for the electron's capture logic.
 const VBW = 90;
 const VBH = 15.75;
 const TEXELS_PER_UNIT = 22;
-const MARGIN = 110; // transparent border (texels) so the outer field fits and sampling past the edge reads 0
+const TEX_H = VBH * TEXELS_PER_UNIT; // texels per wordmark height
+const HALO = 170; // texels: range of the outside distance (must cover MAX_PULL)
+const MARGIN = HALO + 10; // transparent border so outside distances fit and sampling past the edge reads 0
 const DEPTH = 55; // texels: range of the inside distance
-const HALO = 90; // texels: range of the outside distance
-const ROUND_OPEN = 17; // texels (≈ 4.9% of the letter height, 346 texels): radius of the outer corners
+const ROUND_OPEN = 17; // texels (≈ 4.9% of the letter height): radius of the outer corners
 const ROUND_CLOSE = 9; // texels (≈ 2.6%): radius of the inner corners
 
-// Exact Euclidean distance transform (Felzenszwalb & Huttenlocher): distance in texels from every texel
-// to the nearest texel where mask === seed (0 there). Exact circles matter: the corner rounding below is
-// an opening/closing by a disc, and a chamfer metric would round corners into octagons.
-function distanceTransform(mask, w, h, seed) {
-  const INF = 1e20;
-  const n = w * h;
-  const d = new Float64Array(n);
-  for (let i = 0; i < n; i++) d[i] = mask[i] === seed ? 0 : INF;
-  const len = Math.max(w, h);
-  const f = new Float64Array(len);
-  const out = new Float64Array(len);
-  const v = new Int32Array(len);
-  const z = new Float64Array(len + 1);
-  const pass = (count) => {
-    let k = 0;
-    v[0] = 0;
-    z[0] = -INF;
-    z[1] = INF;
-    for (let q = 1; q < count; q++) {
-      let sx = (f[q] + q * q - (f[v[k]] + v[k] * v[k])) / (2 * q - 2 * v[k]);
-      while (sx <= z[k]) {
-        k--;
-        sx = (f[q] + q * q - (f[v[k]] + v[k] * v[k])) / (2 * q - 2 * v[k]);
-      }
-      k++;
-      v[k] = q;
-      z[k] = sx;
-      z[k + 1] = INF;
-    }
-    k = 0;
-    for (let q = 0; q < count; q++) {
-      while (z[k + 1] < q) k++;
-      out[q] = (q - v[k]) * (q - v[k]) + f[v[k]];
-    }
-  };
-  for (let x = 0; x < w; x++) {
-    for (let y = 0; y < h; y++) f[y] = d[y * w + x];
-    pass(h);
-    for (let y = 0; y < h; y++) d[y * w + x] = out[y];
-  }
-  for (let y = 0; y < h; y++) {
-    const row = y * w;
-    for (let x = 0; x < w; x++) f[x] = d[row + x];
-    pass(w);
-    for (let x = 0; x < w; x++) d[row + x] = out[x];
-  }
-  const r = new Float32Array(n);
-  for (let i = 0; i < n; i++) r[i] = Math.sqrt(d[i]);
-  return r;
-}
-
-// Round every corner of a binary mask: an opening by a disc of radius rOpen rounds the convex corners
-// (Z's points, the C terminals, R's leg), a closing by rClose rounds the concave ones (R's notch, the
-// inside corners of D and Z). Stroke widths and counters wider than the discs are left as they are.
-function roundCorners(solid, w, h, rOpen, rClose) {
-  const n = w * h;
-  let m = new Uint8Array(n);
-  let dIn = distanceTransform(solid, w, h, 0);
-  for (let i = 0; i < n; i++) m[i] = dIn[i] > rOpen ? 1 : 0; // erode
-  let dOut = distanceTransform(m, w, h, 1);
-  for (let i = 0; i < n; i++) m[i] = dOut[i] <= rOpen ? 1 : 0; // dilate → opened
-  dOut = distanceTransform(m, w, h, 1);
-  for (let i = 0; i < n; i++) m[i] = dOut[i] <= rClose ? 1 : 0; // dilate
-  dIn = distanceTransform(m, w, h, 0);
-  for (let i = 0; i < n; i++) m[i] = dIn[i] > rClose ? 1 : 0; // erode → closed
-  return m;
-}
+let wordmarkSD = null; // { sd: Float32Array (texels, + inside), tw, th, cw, ch }
 
 function buildWordmarkTexture() {
   const cw = Math.round(VBW * TEXELS_PER_UNIT);
@@ -226,157 +184,153 @@ function buildWordmarkTexture() {
   for (let i = 0; i < n; i++) raw[i] = rgba[i * 4] > 127 ? 1 : 0;
   const solid = roundCorners(raw, tw, th, ROUND_OPEN, ROUND_CLOSE);
 
-  const inside = distanceTransform(solid, tw, th, 0); // letter texels: distance to the nearest outside texel
-  const outside = distanceTransform(solid, tw, th, 1); // outside texels: distance to the nearest letter texel
+  const inside = distanceTransform(solid, tw, th, 0);
+  const outside = distanceTransform(solid, tw, th, 1);
 
   const data = new Uint8Array(n * 4);
+  const sd = new Float32Array(n);
   for (let i = 0; i < n; i++) {
     data[i * 4] = solid[i] * 255;
     data[i * 4 + 1] = Math.round(clamp01(inside[i] / DEPTH) * 255);
     data[i * 4 + 2] = Math.round(clamp01(1 - outside[i] / HALO) * 255);
     data[i * 4 + 3] = 255;
+    sd[i] = solid[i] ? inside[i] : -outside[i];
   }
+  wordmarkSD = { sd, tw, th, cw, ch };
   return { data, tw, th, cw, ch };
 }
 
-// ------------------------------------------------------------------ blue noise
-// A 64×64 threshold map made at load with void-and-cluster (Ulichney): every threshold rank goes to the
-// emptiest spot left, so lit cells spread evenly at any density, with no lattice and no diagonal
-// streaks. ~4k × 4k cheap updates: a few tens of milliseconds, once.
-function blueNoise(N = 64, sigma = 1.6) {
-  const n = N * N;
-  const kernel = new Float32Array(n); // toroidal gaussian, indexed by (dy * N + dx)
-  for (let y = 0; y < N; y++) {
-    for (let x = 0; x < N; x++) {
-      const dx = Math.min(x, N - x);
-      const dy = Math.min(y, N - y);
-      kernel[y * N + x] = Math.exp(-(dx * dx + dy * dy) / (2 * sigma * sigma));
-    }
-  }
-  const energy = new Float32Array(n);
-  const on = new Uint8Array(n);
-  const splat = (i, sign) => {
-    const px = i % N;
-    const py = (i / N) | 0;
-    for (let y = 0; y < N; y++) {
-      const ky = ((y - py + N) % N) * N;
-      const row = y * N;
-      for (let x = 0; x < N; x++) energy[row + x] += sign * kernel[ky + ((x - px + N) % N)];
-    }
-  };
-  const extreme = (wantOn, max) => {
-    let best = -1;
-    let bv = max ? -Infinity : Infinity;
-    for (let i = 0; i < n; i++) {
-      if (on[i] !== wantOn) continue;
-      const v = energy[i];
-      if (max ? v > bv : v < bv) {
-        bv = v;
-        best = i;
-      }
-    }
-    return best;
-  };
-
-  // initial pattern: ~10% random seeds, relaxed by moving the tightest cluster into the largest void
-  const seeds = Math.round(n * 0.1);
-  for (let k = 0; k < seeds; ) {
-    const i = (Math.random() * n) | 0;
-    if (!on[i]) {
-      on[i] = 1;
-      splat(i, 1);
-      k++;
-    }
-  }
-  for (let guard = 0; guard < n; guard++) {
-    const c = extreme(1, true);
-    on[c] = 0;
-    splat(c, -1);
-    const v = extreme(0, false);
-    on[v] = 1;
-    splat(v, 1);
-    if (v === c) break;
-  }
-
-  const rank = new Uint16Array(n);
-  // phase 1: peel the seeds off, tightest cluster first
-  const saveOn = on.slice();
-  const saveE = energy.slice();
-  for (let r = seeds - 1; r >= 0; r--) {
-    const c = extreme(1, true);
-    on[c] = 0;
-    splat(c, -1);
-    rank[c] = r;
-  }
-  on.set(saveOn);
-  energy.set(saveE);
-  // phase 2: fill the largest voids until every cell has a rank
-  for (let r = seeds; r < n; r++) {
-    const v = extreme(0, false);
-    on[v] = 1;
-    splat(v, 1);
-    rank[v] = r;
-  }
-  const out = new Uint8Array(n);
-  for (let i = 0; i < n; i++) out[i] = Math.round(((rank[i] + 0.5) / n) * 255);
-  return out;
+// signed distance (in wordmark heights, + inside) of a point (q: u across the wordmark, v up) to the
+// letter in column i. Outside its column the distance keeps growing linearly.
+function letterDistance(i, qx, qy, aspect) {
+  const { sd, tw, cw, ch } = wordmarkSD;
+  // the letter at full size in its resting orientation, even mid-flip, so capture never stalls on a flip
+  const sx = flips[i].mx;
+  const sy = flips[i].my;
+  const cu = LETTER_CENTERS[i];
+  const ux = cu + (qx - cu) / sx;
+  const vy = 0.5 + (qy - 0.5) / sy;
+  const lim = MARGIN / TEX_H - 0.02;
+  const cx = clamp(ux, Math.max(LETTER_EDGES[i], -lim / aspect), Math.min(LETTER_EDGES[i + 1], 1 + lim / aspect));
+  const cy = clamp(vy, -lim, 1 + lim);
+  const extra = Math.hypot((ux - cx) * aspect, vy - cy);
+  const tx = Math.round(MARGIN + cx * cw);
+  const ty = Math.round(MARGIN + (1 - cy) * ch);
+  return sd[ty * tw + tx] / TEX_H - extra;
 }
 
-// ------------------------------------------------------------------ shader
-// The canvas runs at one texel per dither cell and is upscaled by an integer factor with
-// image-rendering: pixelated, so every cell is a crisp square of exactly CELL device pixels.
-//
-// Density, not cell size, carries the gradient: the screen is a quadtree of 8 / 4 / 2 / 1-cell blocks.
-// Each block keeps subdividing while the local density (wordmark field + light) beats a jittered
-// threshold, so the transition from sparse dot grid at the edges to continuous fine grain at the
-// centre is stochastic: no rings, no bands. Every lit dot is the same one cell; only its spacing
-// and tone change. Fine cells are dithered against a blue-noise threshold map (no Bayer lattice, no moire).
+// ------------------------------------------------------------------ shaders
+// Two passes. FIELD runs at one fragment per dither cell into a texture; COMPOSE runs at device pixels,
+// upscales the cells (each cell an exact CELL × CELL square) and dithers the UI text at device resolution.
 const VERT = `
 attribute vec2 position;
 void main() { gl_Position = vec4(position, 0.0, 1.0); }
 `;
 
-const FRAG = `
+// shared by both passes: how the electron and the waves push the field around
+const PUSH = `
+uniform vec2  uDev;       // canvas size, device px
+uniform vec3  uE;         // electron: x, y (device px), presence 0..1
+uniform vec2  uEV;        // electron velocity, device px / s
+uniform float uER;        // electron radius, device px
+uniform vec4  uW[4];      // waves: x, y (device px), age (s, < 0 = off), amplitude
+uniform float uTime;
+uniform sampler2D uBlue;
+
+#define PUSH_AMT 0.42      // radial push, × electron radius
+#define DEFLECT 0.35       // sideways deflection at speed, × electron radius
+#define RING 0.55          // density piled up where the pushed field compresses
+#define WAKE 0.35          // density in the short wake behind a moving electron
+#define WAVE_SPEED 0.95    // screen heights per second
+#define WAVE_WIDTH 0.03    // screen heights
+#define WAVE_PUSH 0.007    // screen heights
+#define WAVE_DENS 0.55
+
+float blue(vec2 p) {
+  return texture2D(uBlue, (mod(p, 64.0) + 0.5) / 64.0).r;
+}
+
+// returns the displacement (device px) to subtract from a sample position, and in .z the extra density
+// where the field is compressed (the ring around the electron, its wake, the wave fronts)
+vec3 pushAt(vec2 p) {
+  vec3 o = vec3(0.0);
+  vec2 d = p - uE.xy;
+  float r = length(d) + 0.001;
+  vec2 dir = d / r;
+  float R = uER;
+  float f = uE.z * exp(-(r * r) / (R * R));
+  float sp = length(uEV);
+  float fast = clamp(sp / (R * 14.0), 0.0, 1.0);
+  vec2 perp = vec2(-dir.y, dir.x);
+  // like a charge moving through a field: pushed outward, and bent sideways relative to the motion
+  float side = sign(dir.x * uEV.y - dir.y * uEV.x);
+  o.xy += dir * PUSH_AMT * R * f;
+  o.xy += perp * side * DEFLECT * R * f * fast;
+  o.z += uE.z * RING * exp(-pow((r - 1.15 * R) / (0.4 * R), 2.0));
+  if (sp > 1.0) {
+    vec2 tail = uE.xy - uEV * 0.07;
+    o.z += uE.z * WAKE * fast * exp(-dot(p - tail, p - tail) / (R * R * 1.4));
+  }
+  for (int i = 0; i < 4; i++) {
+    vec4 w = uW[i];
+    if (w.z < 0.0) continue;
+    vec2 dw = p - w.xy;
+    float rw = length(dw) + 0.001;
+    float front = w.z * WAVE_SPEED * uDev.y;
+    float ring = exp(-pow((rw - front) / (WAVE_WIDTH * uDev.y), 2.0)) * w.w;
+    o.xy += dw / rw * ring * WAVE_PUSH * uDev.y;
+    o.z += ring * WAVE_DENS;
+  }
+  return o;
+}
+`;
+
+const FIELD = `
 precision highp float;
 #define DEPTH_TX ${DEPTH.toFixed(1)}
 #define HALO_TX ${HALO.toFixed(1)}
-// knobs: letter dot density (base, wave swing, light), edge ramp and roughness (cells),
-// letter dot tone, per-dot twinkle depth (letters twinkle at 35% of it), and the cool tint of field dots relative to paper
-#define DENS_L 0.72
-#define DENS_WAVE 0.25
-#define DENS_LIGHT 0.32
-#define EDGE_SOFT 2.2
-#define EDGE_NOISE 2.6
-#define TONE_L 0.97
-#define TWINKLE 0.3
-#define FIELD_TINT vec3(0.9, 0.94, 1.0)
 
-uniform vec4  uView;      // x, y (bottom-left), w, h of the visible screen, in cells
-uniform float uTime;
-uniform vec2  uLight;     // light centre, in cells
-uniform vec2  uVel;       // light velocity, in screen heights per second
-uniform float uHover;
+// ---- knobs
+#define DENS_L 0.72        // share of lattice sites lit inside a letter
+#define DENS_WAVE 0.25     // swing of the slow brightness wave inside letters
+#define DENS_E 0.3         // extra letter density around the electron
+#define EDGE_SOFT 3.6      // letter edge: width of the density ramp, in cells (merges with the field)
+#define EDGE_HOVER 0.3     // … × this right around the electron (crisper there)
+#define EDGE_NOISE 2.2     // roughness of that ramp, in cells
+#define TONE_L 0.97        // letter dot tone
+#define TWINKLE 0.3        // per-dot twinkle depth (letters at 35% of it)
+#define FIELD_TINT vec3(0.9, 0.94, 1.0)
+#define BLOB_R 0.09        // bubble radius, × wordmark height
+#define NECK_K 0.6         // bubble neck (smooth-union width), × wordmark height
+#define CORE 0.32          // electron core radius, × electron radius
+#define LINE_TONE 0.5      // UI shapes (borders)
+#define AREA_QUIET 0.25    // field density under a UI element
+#define HOT_DENS 0.16      // fill of a hovered UI element
+#define IMG_DENS 0.9       // image tone → dot density
+
+${PUSH}
+
+uniform vec2  uCells;     // field size, in cells
+uniform float uCell;      // device px per cell
 uniform float uIntro;
+uniform float uUi;
 uniform vec4  uLogo;      // x, y (bottom-left), w, h of the wordmark, in cells
-uniform vec2  uTexScale;  // content size / texture size
-uniform vec2  uTexOff;    // margin / texture size
-uniform vec2  uFlip[5];   // per letter: horizontal / vertical scale (-1..1, 0 = edge-on mid-flip)
+uniform vec2  uTexScale;
+uniform vec2  uTexOff;
+uniform float uTexPerCell;
+uniform vec2  uFlip[5];
+uniform vec4  uBlob;      // bubble: x, y (device px), strength, letter index
+uniform vec4  uHot;       // hovered UI element, device px (x0, y0, x1, y1)
+uniform float uHotAmt;
+uniform vec4  uFocus;     // keyboard-focused UI element, device px
+uniform float uFocusAmt;
 uniform vec3  uInk;
 uniform vec3  uPaper;
 uniform sampler2D uMask;
-uniform sampler2D uBlue;
-uniform float uTexPerCell; // wordmark texels per cell
+uniform sampler2D uUI;
 
-float hash3(vec3 p) {
-  return fract(sin(dot(p, vec3(127.1, 311.7, 74.7))) * 43758.5453123);
-}
-float hash2(vec2 p) {
-  return fract(sin(dot(p, vec2(12.9898, 78.233))) * 43758.5453);
-}
-float blue(vec2 cell) {
-  return texture2D(uBlue, (mod(cell, 64.0) + 0.5) / 64.0).r;
-}
-
+float hash3(vec3 p) { return fract(sin(dot(p, vec3(127.1, 311.7, 74.7))) * 43758.5453123); }
+float hash2(vec2 p) { return fract(sin(dot(p, vec2(12.9898, 78.233))) * 43758.5453); }
 float vnoise(vec3 x) {
   vec3 i = floor(x);
   vec3 f = fract(x);
@@ -387,32 +341,19 @@ float vnoise(vec3 x) {
   float d = mix(hash3(i + vec3(0.0, 1.0, 1.0)), hash3(i + vec3(1.0, 1.0, 1.0)), f.x);
   return mix(mix(a, b, f.y), mix(c, d, f.y), f.z);
 }
-
-// --- the light: a long, soft falloff (not a disc), its edge bent by slow noise, breathing,
-// and stretched into a short tail behind the direction it is moving
-float lightAt(vec2 p) {
-  vec2 d = (p - uLight) / uView.w;
-  float sp = length(uVel);
-  if (sp > 0.001) {
-    vec2 vn = uVel / sp;
-    float a = dot(d, vn);
-    d -= vn * min(a, 0.0) * clamp(sp * 0.45, 0.0, 0.55);
-  }
-  vec2 w = vec2(
-    vnoise(vec3(d * 2.4, uTime * 0.16)),
-    vnoise(vec3(d * 2.4 + vec2(5.2, 1.3), uTime * 0.13 + 3.0))
-  ) - 0.5;
-  float r = length(d * vec2(0.85, 1.0) + w * 0.24);
-  float breathe = 1.0 + 0.08 * sin(uTime * 0.83) + 0.05 * sin(uTime * 1.37 + 1.0);
-  return exp(-r * 6.0 / breathe);
+float smin(float a, float b, float k) {
+  float h = max(k - abs(a - b), 0.0) / max(k, 0.0001);
+  return min(a, b) - h * h * k * 0.25;
+}
+float inRect(vec2 p, vec4 r) {
+  return step(r.x, p.x) * step(p.x, r.z) * step(r.y, p.y) * step(p.y, r.w);
 }
 
-// --- the field: 1 at the wordmark, falling off toward the edges as an ellipse fitted to the screen,
-// warped by slow noise so it reads like a cloud
+// the field: 1 at the wordmark, falling off toward the edges, warped by slow noise
 float fieldAt(vec2 p) {
   vec2 lc = uLogo.xy + 0.5 * uLogo.zw;
-  vec2 e = (p - lc) / (0.5 * uView.zw);
-  vec2 n = (p - lc) / uView.w;
+  vec2 e = (p - lc) / (0.5 * uCells);
+  vec2 n = (p - lc) / uCells.y;
   vec2 w = vec2(
     vnoise(vec3(n * 1.3 + vec2(3.1, 1.7), uTime * 0.035)),
     vnoise(vec3(n * 1.3 + vec2(8.2, 4.4), uTime * 0.035 + 9.0))
@@ -420,23 +361,27 @@ float fieldAt(vec2 p) {
   float r = length(e * vec2(1.0, 0.82) + w * 0.75);
   return exp(-r * r * 3.0);
 }
-
-// density: how much detail a spot gets. "lt" returns the light there; the result also drives tone.
-float densityAt(vec2 p, out float lt) {
-  lt = lightAt(p) * uHover; // the field only lights up where someone is pointing
-  float yv = (p.y - uView.y) / uView.w;
+float densityAt(vec2 p) {
+  float yv = p.y / uCells.y;
   float calm = smoothstep(0.0, 0.15, min(yv, 1.0 - yv)); // breathing room behind the labels
   float fill = smoothstep(0.0, 1.0, uIntro * 1.25);
-  return ((0.06 + 0.94 * fieldAt(p)) * (0.35 + 0.65 * calm) + lt * (0.32 + 0.3 * uHover)) * fill;
+  return (0.06 + 0.94 * fieldAt(p)) * (0.35 + 0.65 * calm) * fill;
 }
-
-// the wordmark and a soft oval around it always get full resolution, whatever the screen shape
+// full resolution around the wordmark, around the electron and on the wave fronts
 float keepFine(vec2 p) {
   vec2 e = (p - (uLogo.xy + 0.5 * uLogo.zw)) / (uLogo.zw * vec2(0.75, 2.0));
-  return 1.0 - smoothstep(0.55, 1.0, length(e));
+  float k = 1.0 - smoothstep(0.55, 1.0, length(e));
+  vec2 pd = p * uCell;
+  k = max(k, uE.z * (1.0 - smoothstep(2.5, 4.0, length(pd - uE.xy) / uER)));
+  for (int i = 0; i < 4; i++) {
+    vec4 w = uW[i];
+    if (w.z < 0.0) continue;
+    float front = w.z * WAVE_SPEED * uDev.y;
+    k = max(k, w.w * exp(-pow((length(pd - w.xy) - front) / (3.0 * WAVE_WIDTH * uDev.y), 2.0)));
+  }
+  return k;
 }
 
-// which of the five letters this x belongs to (C R D Z C)
 float letterIndex(float u) {
   return step(18.55 / 90.0, u) + step(36.15 / 90.0, u) + step(54.75 / 90.0, u) + step(71.15 / 90.0, u);
 }
@@ -459,117 +404,189 @@ vec2 flipFor(float li) {
   for (int i = 0; i < 5; i++) {
     if (abs(float(i) - li) < 0.5) f = uFlip[i];
   }
-  // never exactly zero: the letter collapses to a hairline instead of dividing by zero
   return vec2(f.x < 0.0 ? min(f.x, -0.02) : max(f.x, 0.02), f.y < 0.0 ? min(f.y, -0.02) : max(f.y, 0.02));
 }
 vec4 maskAt(vec2 tc) {
   float inside = step(0.0, tc.x) * step(tc.x, 1.0) * step(0.0, tc.y) * step(tc.y, 1.0);
   return texture2D(uMask, tc) * inside;
 }
+// signed distance (cells, + inside) to letter li as currently flipped; it keeps growing outside the
+// letter's column, so a bubble can stretch across a gap without picking up the neighbour's shape
+float letterSD(float li, vec2 q, float aspect) {
+  vec2 fs = flipFor(li);
+  float cu = letterCenter(li);
+  vec2 qf = vec2(cu + (q.x - cu) / fs.x, 0.5 + (q.y - 0.5) / fs.y);
+  vec2 b = letterBounds(li);
+  vec2 qc = vec2(clamp(qf.x, b.x, b.y), clamp(qf.y, -0.45, 1.45));
+  float extra = length((qf - qc) * vec2(aspect, 1.0)) * uLogo.w;
+  vec4 t = maskAt(qc * uTexScale + uTexOff);
+  float tpc = uTexPerCell / max(min(abs(fs.x), abs(fs.y)), 0.15);
+  return (t.r > 0.5 ? t.g * DEPTH_TX : -(1.0 - t.b) * HALO_TX) / tpc - extra;
+}
 
 void main() {
   vec2 cell = floor(gl_FragCoord.xy);
-  float lt;
+  vec2 pDev = (cell + 0.5) * uCell;
+  vec3 push = pushAt(pDev);
+  vec2 c = (pDev - push.xy) / uCell; // where this cell samples the scene from (displaced), in cells
+  float rE = length(pDev - uE.xy);
+  float eNear = uE.z * exp(-pow(rE / (3.0 * uER), 2.0));
+  float site = 1.0 - mod(cell.x + cell.y, 2.0); // one checkerboard lattice for every dot
+  float th = blue(cell);
 
-  // ---- quadtree: 8 → 4 → 1 cells, each step taken only where density beats a jittered threshold
+  // ---- quadtree: 8 → 4 → 1 cells, each step taken where density beats a jittered threshold
   float sz = 8.0;
   vec2 blk = floor(cell / 8.0);
   vec2 c8 = (blk + 0.5) * 8.0;
-  float D = densityAt(c8, lt);
+  float D = densityAt(c8);
   if (max(D, keepFine(c8)) > 0.2 + 0.22 * (hash2(blk) - 0.5)) {
     sz = 4.0;
     blk = floor(cell / 4.0);
     vec2 c4 = (blk + 0.5) * 4.0;
-    D = densityAt(c4, lt);
+    D = densityAt(c4);
     if (max(D, keepFine(c4)) > 0.44 + 0.24 * (hash2(blk + 31.7) - 0.5)) {
       sz = 1.0;
       blk = cell;
-      D = densityAt(cell + 0.5, lt);
+      D = densityAt(c);
     }
   }
 
+  // the UI layer, sampled where the field is displaced to (so the electron and waves move it too)
+  vec4 ui = texture2D(uUI, (c * uCell) / uDev);
+  float area = step(0.1, ui.g);
+  float shape = clamp((ui.g - 0.25) / 0.75, 0.0, 1.0);
+  float quiet = mix(1.0, AREA_QUIET, area * uUi) * (1.0 - 0.8 * step(0.02, ui.r) * uUi);
+
   float on = 0.0;
   float tone = 0.0;
-  vec3 tint = vec3(1.0);
+  vec3 tint = FIELD_TINT;
+  float h = hash2(cell);
+  float tw = 0.5 + 0.5 * sin(uTime * (0.6 + 1.6 * h) + h * 60.0);
 
   if (sz > 1.5) {
-    // ---- sparse field: one dot per block, same size everywhere; spacing and tone carry the gradient
+    // ---- sparse field: one dot per block
     vec2 inBlk = cell - blk * sz;
     float spot = floor(sz * 0.5 - 0.5);
     float isDot = step(abs(inBlk.x - spot) + abs(inBlk.y - spot), 0.0);
-    float h = hash2(blk * 1.31 + sz);
-    float present = step(h, (0.45 + 1.4 * D) * smoothstep(0.0, 0.7, uIntro));
-    float twinkle = 0.82 + 0.18 * sin(uTime * (0.5 + h) + h * 40.0);
+    float hb = hash2(blk * 1.31 + sz);
+    float present = step(hb, (0.45 + 1.4 * D) * smoothstep(0.0, 0.7, uIntro) * quiet);
     on = isDot * present;
-    tone = (0.2 + 0.12 * D + 0.4 * lt) * twinkle;
-    tint = FIELD_TINT;
+    tone = (0.2 + 0.12 * D) * (1.0 - TWINKLE * tw);
   } else {
-    // ---- fine field: the wordmark and the cloud around it, dithered cell by cell
-    vec2 c = cell + 0.5;
+    // ---- fine field: the wordmark and the cloud around it
     vec2 q = (c - uLogo.xy) / uLogo.zw;
     float aspect = uLogo.z / uLogo.w;
-
-    // each letter can flip, horizontally or vertically, around its own centre
     float li = letterIndex(q.x);
     vec2 fs = flipFor(li);
-    float cu = letterCenter(li);
-    vec2 qf = vec2(cu + (q.x - cu) / fs.x, 0.5 + (q.y - 0.5) / fs.y);
-    vec2 bnd = letterBounds(li);
-    float inBox = step(bnd.x, qf.x) * step(qf.x, bnd.y) * step(-0.05, qf.y) * step(qf.y, 1.05);
 
     // entrance: each letter dissolves in, one after the other, drifting up a little
     float e = clamp(uIntro * 1.6 - li * 0.12, 0.0, 1.0);
     float eo = 1.0 - pow(1.0 - e, 3.0);
-    vec2 rise = vec2(0.0, 0.18 * (1.0 - eo));
+    vec2 qr = q - vec2(0.0, 0.18 * (1.0 - eo));
 
-    vec2 tc = (qf + rise) * uTexScale + uTexOff;
-    vec4 t = maskAt(tc);
-    // signed distance to the letter's edge, in cells (+ inside, - outside), from the two distance fields
-    // (a squeezed letter packs more texels per cell, so its edge loosens while it turns)
-    float tpc = uTexPerCell / max(min(abs(fs.x), abs(fs.y)), 0.15);
-    float sd = (t.r > 0.5 ? t.g * DEPTH_TX : -(1.0 - t.b) * HALO_TX) / tpc;
+    float sd = letterSD(li, qr, aspect);
+    // the sticky bubble: the captured letter's shape, smoothly united with a blob at the electron
+    if (uBlob.z > 0.001) {
+      float bs = uBlob.z;
+      float dB = length(pDev - uBlob.xy) / uCell - BLOB_R * uLogo.w * bs;
+      float dL = -letterSD(uBlob.w, qr, aspect);
+      sd = max(sd, -smin(dL, dB, NECK_K * uLogo.w * bs));
+    }
 
-    float th = blue(cell);
-    vec2 pc = (c - (uLogo.xy + 0.5 * uLogo.zw)) / uView.w;
+    vec2 pc = (c - (uLogo.xy + 0.5 * uLogo.zw)) / uCells.y;
     float nz = vnoise(vec3(pc * 4.5, uTime * 0.07)) * 0.65 + vnoise(vec3(pc * 11.0 + 3.0, uTime * 0.11)) * 0.35;
-    // a slow brightness wave drifting through field and letters alike
     float wave = vnoise(vec3(pc * 7.0 + vec2(uTime * 0.045, -uTime * 0.02), uTime * 0.3)) - 0.5;
 
-    // ---- one material. Field and letters are the same single-cell dots on the same blue-noise threshold;
-    // a letter is only a region where they gather (higher density) and burn brighter. Its boundary is a
-    // density ramp a few cells wide, roughened by noise, so a few dots stray outside and a few gaps open
-    // inside: the shape is perceived from where the dots gather, never drawn.
-    float rough = (vnoise(vec3(c * 0.33, uTime * 0.25)) - 0.5) * EDGE_NOISE;
-    float letter = smoothstep(-EDGE_SOFT, EDGE_SOFT, sd + rough) * inBox * smoothstep(0.0, 1.0, eo * 1.1);
+    // one material: a letter is only where the same dots gather and burn brighter. Its boundary is a wide
+    // density ramp roughened by noise (dots stray out, gaps open in), crisper right around the electron.
+    float rough = (vnoise(vec3(c * 0.3, uTime * 0.25)) - 0.5) * EDGE_NOISE;
+    float soft = EDGE_SOFT * mix(1.0, EDGE_HOVER, eNear);
+    float letter = smoothstep(-soft, soft, sd + rough * mix(1.0, 0.4, eNear)) * smoothstep(0.0, 1.0, eo * 1.1);
 
-    float lumC = ((0.03 + 0.1 * nz * nz) * (1.0 + 0.6 * wave) + 0.12 * lt) * smoothstep(0.0, 0.7, uIntro);
-    float lumL = 0.0;
-    float glow = 0.0;
-    if (letter > 0.0) {
-      glow = lightAt(c); // the light energises the letters' dots even when nobody is pointing
-      float edgeOn = abs(fs.x * fs.y);
-      lumL = (DENS_L + 0.5 * wave * DENS_WAVE + DENS_LIGHT * glow) * (0.55 + 0.45 * edgeOn);
-    }
-    float lum = mix(lumC * 1.4, lumL, letter);
-    // every dot sits on one checkerboard lattice, so dots touch at most at a corner and never fuse into
-    // worms: up close it is always discrete dots, in the letters as in the field
-    float site = 1.0 - mod(cell.x + cell.y, 2.0);
+    float lumC = ((0.03 + 0.1 * nz * nz) * (1.0 + 0.6 * wave) + push.z * 0.35) * smoothstep(0.0, 0.7, uIntro);
+    float edgeOn = abs(fs.x * fs.y);
+    float lumL = (DENS_L + 0.5 * wave * DENS_WAVE + DENS_E * eNear + push.z * 0.3) * (0.55 + 0.45 * edgeOn);
+    float lum = mix(lumC * 1.4 * quiet, lumL, letter);
     on = site * step(th, lum);
-
-    // tone: every dot twinkles on its own slow phase; letter dots are paper-white, field dots dimmer and a
-    // touch cooler
-    float h = hash2(cell);
-    float tw = 0.5 + 0.5 * sin(uTime * (0.6 + 1.6 * h) + h * 60.0);
-    float toneC = (0.32 + 0.4 * lt) * (1.0 - TWINKLE * tw);
-    float toneL = (TONE_L + (1.0 - TONE_L) * glow) * (1.0 - 0.35 * TWINKLE * tw);
-    tone = mix(toneC, toneL, letter);
+    float toneC = 0.32 + 0.3 * eNear + 0.3 * push.z;
+    float toneL = TONE_L;
+    tone = mix(toneC * (1.0 - TWINKLE * tw), toneL * (1.0 - 0.35 * TWINKLE * tw), letter);
     tint = mix(FIELD_TINT, vec3(1.0), letter);
+
+    // the electron's core: a small, precise knot of bright dots
+    float core = uE.z * (1.0 - smoothstep(CORE * 0.6, CORE, rE / uER));
+    if (site * step(th, core) > 0.5) {
+      on = 1.0;
+      tone = 1.0;
+      tint = vec3(1.0);
+    }
+  }
+
+  // ---- UI shapes (borders, SVG, images) and states, as dots on the same lattice
+  float hot = inRect(pDev, uHot) * uHotAmt;
+  float uiLum = (shape * (1.0 + hot * 0.6) + area * (ui.b * IMG_DENS + hot * HOT_DENS) + push.z * area * 0.3) * uUi;
+  if (site * step(th, uiLum) > 0.5) {
+    on = 1.0;
+    tone = mix(LINE_TONE, 0.95, max(hot, ui.b)) * (1.0 - 0.5 * TWINKLE * tw);
+    tint = vec3(1.0);
+  }
+  // keyboard focus: a dotted ring just outside the element
+  vec2 fc = 0.5 * (uFocus.xy + uFocus.zw);
+  vec2 fh = 0.5 * (uFocus.zw - uFocus.xy) + 4.0 * uCell;
+  vec2 fq = abs(pDev - fc) - fh;
+  float fd = length(max(fq, 0.0)) + min(max(fq.x, fq.y), 0.0);
+  if (uFocusAmt > 0.01 && abs(fd) < uCell * 0.75 && site > 0.5 && th < uFocusAmt) {
+    on = 1.0;
+    tone = 0.95;
+    tint = vec3(1.0);
   }
 
   gl_FragColor = vec4(mix(uInk, uPaper * tint * clamp(tone, 0.0, 1.0), on), 1.0);
 }
 `;
 
+const COMPOSE = `
+precision highp float;
+#define TEXT_DENS 0.94     // text: share of glyph pixels lit
+#define TEXT_TONE 0.62     // text tone at rest (labels stay quiet)
+
+${PUSH}
+
+uniform sampler2D uField;
+uniform sampler2D uUI;
+uniform vec2  uCells;
+uniform float uCell;
+uniform float uUi;
+uniform vec4  uHot;
+uniform float uHotAmt;
+uniform vec3  uPaper;
+
+void main() {
+  vec2 px = floor(gl_FragCoord.xy);
+  vec2 cell = floor(px / uCell);
+  vec3 col = texture2D(uField, (cell + 0.5) / uCells).rgb;
+  vec3 push = pushAt(px + 0.5);
+  float t = texture2D(uUI, (px + 0.5 - push.xy) / uDev).r;
+  float hot = step(uHot.x, px.x) * step(px.x, uHot.z) * step(uHot.y, px.y) * step(px.y, uHot.w) * uHotAmt;
+  float on = step(blue(px + vec2(17.0, 5.0)), t * TEXT_DENS * uUi);
+  vec3 tc = uPaper * mix(TEXT_TONE, 1.0, clamp(max(hot, push.z), 0.0, 1.0));
+  gl_FragColor = vec4(mix(col, tc, on), 1.0);
+}
+`;
+
+// ------------------------------------------------------------------ scene elements
+// The registry of everything rendered into the dots. Layout stays in the DOM; see README "Adding an element".
+const elements = createElements(() => scene?.rebuildUI());
+elements.add({ id: "wordmark", kind: "wordmark", node: logoSvg, sticky: true });
+elements.add({ id: "labels", kind: "text", node: hero.querySelector(".bar"), density: 1 });
+const linksNav = hero.querySelector(".links");
+elements.add({ id: "links", kind: "box", node: linksNav, area: true, outline: true, density: 0.6 });
+linksNav.querySelectorAll("a").forEach((a, i) => {
+  elements.add({ id: `link-${i}`, kind: "box", node: a, outline: true, density: 0.6, hover: true });
+  elements.add({ id: `link-${i}-text`, kind: "text", node: a, density: 1 });
+});
+
+// ------------------------------------------------------------------ WebGL
 function createScene() {
   const gl = canvas.getContext("webgl", { antialias: false, alpha: false, powerPreference: "high-performance" });
   if (!gl) return null;
@@ -580,109 +597,183 @@ function createScene() {
     gl.compileShader(s);
     return gl.getShaderParameter(s, gl.COMPILE_STATUS) ? s : (console.warn(gl.getShaderInfoLog(s)), null);
   };
-  const vs = compile(gl.VERTEX_SHADER, VERT);
-  const fs = compile(gl.FRAGMENT_SHADER, FRAG);
-  if (!vs || !fs) return null;
+  const program = (fragSrc) => {
+    const vs = compile(gl.VERTEX_SHADER, VERT);
+    const fs = compile(gl.FRAGMENT_SHADER, fragSrc);
+    if (!vs || !fs) return null;
+    const p = gl.createProgram();
+    gl.attachShader(p, vs);
+    gl.attachShader(p, fs);
+    gl.bindAttribLocation(p, 0, "position");
+    gl.linkProgram(p);
+    return gl.getProgramParameter(p, gl.LINK_STATUS) ? p : null;
+  };
+  const field = program(FIELD);
+  const compose = program(COMPOSE);
+  if (!field || !compose) return null;
 
-  const prog = gl.createProgram();
-  gl.attachShader(prog, vs);
-  gl.attachShader(prog, fs);
-  gl.linkProgram(prog);
-  if (!gl.getProgramParameter(prog, gl.LINK_STATUS)) return null;
-  gl.useProgram(prog);
-
-  // full-screen triangle
   const buf = gl.createBuffer();
   gl.bindBuffer(gl.ARRAY_BUFFER, buf);
   gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([-1, -1, 3, -1, -1, 3]), gl.STATIC_DRAW);
-  const loc = gl.getAttribLocation(prog, "position");
-  gl.enableVertexAttribArray(loc);
-  gl.vertexAttribPointer(loc, 2, gl.FLOAT, false, 0, 0);
+  gl.enableVertexAttribArray(0);
+  gl.vertexAttribPointer(0, 2, gl.FLOAT, false, 0, 0);
 
-  // the wordmark (clamped, linear)
+  const texture = (unit, filter, wrap) => {
+    const t = gl.createTexture();
+    gl.activeTexture(gl.TEXTURE0 + unit);
+    gl.bindTexture(gl.TEXTURE_2D, t);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, filter);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, filter);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, wrap);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, wrap);
+    return t;
+  };
+
+  // unit 0: wordmark · 1: blue noise · 2: UI mask · 3: the field (render target)
   const wm = buildWordmarkTexture();
-  const tex = gl.createTexture();
-  gl.activeTexture(gl.TEXTURE0);
-  gl.bindTexture(gl.TEXTURE_2D, tex);
-  gl.pixelStorei(gl.UNPACK_ALIGNMENT, 4);
+  texture(0, gl.LINEAR, gl.CLAMP_TO_EDGE);
   gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, true);
+  gl.pixelStorei(gl.UNPACK_ALIGNMENT, 4);
   gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, wm.tw, wm.th, 0, gl.RGBA, gl.UNSIGNED_BYTE, wm.data);
-  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
-  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
-  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
-  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
 
-  // the blue-noise threshold map (repeats, nearest)
-  const bn = gl.createTexture();
-  gl.activeTexture(gl.TEXTURE1);
-  gl.bindTexture(gl.TEXTURE_2D, bn);
-  gl.pixelStorei(gl.UNPACK_ALIGNMENT, 1);
+  texture(1, gl.NEAREST, gl.REPEAT);
   gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, false);
+  gl.pixelStorei(gl.UNPACK_ALIGNMENT, 1);
   gl.texImage2D(gl.TEXTURE_2D, 0, gl.LUMINANCE, 64, 64, 0, gl.LUMINANCE, gl.UNSIGNED_BYTE, blueNoise());
-  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.NEAREST);
-  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST);
-  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.REPEAT);
-  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.REPEAT);
 
-  const u = (name) => gl.getUniformLocation(prog, name);
-  const U = {
-    view: u("uView"), time: u("uTime"), light: u("uLight"), vel: u("uVel"), hover: u("uHover"),
-    intro: u("uIntro"), logo: u("uLogo"), flip: u("uFlip[0]"), tpc: u("uTexPerCell"),
-  };
-  gl.uniform3fv(u("uInk"), INK);
-  gl.uniform3fv(u("uPaper"), PAPER);
-  gl.uniform1i(u("uMask"), 0);
-  gl.uniform1i(u("uBlue"), 1);
-  gl.uniform2f(u("uTexScale"), wm.cw / wm.tw, wm.ch / wm.th);
-  gl.uniform2f(u("uTexOff"), MARGIN / wm.tw, MARGIN / wm.th);
+  const uiTex = texture(2, gl.NEAREST, gl.CLAMP_TO_EDGE);
+  const uiCanvas = document.createElement("canvas");
 
-  // One canvas texel = one dither cell = CELL device pixels (an integer, so upscaling stays crisp).
-  // A cell is ~1/80 of the wordmark's height, between 1 and 1.5 CSS px, and never under 2 device px:
-  // 1.5 CSS px on a 2× laptop, 1 CSS px on a 2× or 3× phone, 2 CSS px on a 1× screen.
+  const fieldTex = texture(3, gl.NEAREST, gl.CLAMP_TO_EDGE);
+  const fbo = gl.createFramebuffer();
+
+  const locs = (p, names) => Object.fromEntries(names.map((n) => [n, gl.getUniformLocation(p, n)]));
+  const common = ["uDev", "uE", "uEV", "uER", "uW[0]", "uTime", "uBlue", "uUI", "uCells", "uCell", "uUi", "uHot", "uHotAmt", "uPaper"];
+  const UF = locs(field, [...common, "uIntro", "uLogo", "uTexScale", "uTexOff", "uTexPerCell", "uFlip[0]", "uBlob", "uFocus", "uFocusAmt", "uInk", "uMask"]);
+  const UC = locs(compose, [...common, "uField"]);
+
+  gl.useProgram(field);
+  gl.uniform1i(UF.uMask, 0);
+  gl.uniform1i(UF.uBlue, 1);
+  gl.uniform1i(UF.uUI, 2);
+  gl.uniform2f(UF.uTexScale, wm.cw / wm.tw, wm.ch / wm.th);
+  gl.uniform2f(UF.uTexOff, MARGIN / wm.tw, MARGIN / wm.th);
+  gl.uniform3fv(UF.uInk, INK);
+  gl.uniform3fv(UF.uPaper, PAPER);
+  gl.useProgram(compose);
+  gl.uniform1i(UC.uBlue, 1);
+  gl.uniform1i(UC.uUI, 2);
+  gl.uniform1i(UC.uField, 3);
+  gl.uniform3fv(UC.uPaper, PAPER);
+
+  // A dither cell is ~1/80 of the wordmark's height, between 1 and 1.5 CSS px and never under 2 device px.
+  // The canvas itself runs at device pixels; the field pass runs at one fragment per cell.
   const dpr = window.devicePixelRatio || 1;
-  let s = 1; // cells per CSS px
-  let viewH = 1; // visible hero height, CSS px
-  let canvasCssH = 1;
+  let CELL = 3;
+  let cells = [1, 1];
+  let dev = [1, 1];
+  let hr = hero.getBoundingClientRect();
 
-  const resize = () => {
-    const hr = hero.getBoundingClientRect();
-    const cssCell = clamp(logoSvg.getBoundingClientRect().height / 80, 1, 1.5);
-    const CELL = Math.max(2, Math.round(dpr * cssCell));
-    s = dpr / CELL;
-    const cw = Math.max(1, Math.ceil(hr.width * s));
-    const ch = Math.max(1, Math.ceil(hr.height * s));
-    canvas.width = cw;
-    canvas.height = ch;
-    // the canvas covers the hero and spills by < 1 cell, so each texel maps to exactly CELL device px
-    canvas.style.width = `${cw / s}px`;
-    canvas.style.height = `${ch / s}px`;
-    canvasCssH = ch / s;
-    viewH = hr.height;
-    gl.viewport(0, 0, cw, ch);
-    gl.uniform4f(U.view, 0, (canvasCssH - viewH) * s, hr.width * s, hr.height * s);
-  };
-  new ResizeObserver(() => {
-    resize();
+  function rebuildUI() {
+    rasterise(elements.list, uiCanvas, hero, dpr, CELL / dpr);
+    gl.activeTexture(gl.TEXTURE2);
+    gl.bindTexture(gl.TEXTURE_2D, uiTex);
+    gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, true);
+    gl.pixelStorei(gl.UNPACK_PREMULTIPLY_ALPHA_WEBGL, false);
+    gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, uiCanvas);
     if (reduce) draw();
+  }
+
+  function resize() {
+    hr = hero.getBoundingClientRect();
+    measureLogo();
+    const cssCell = clamp(state.logoCss[3] / 80, 1, 1.5);
+    CELL = Math.max(2, Math.round(dpr * cssCell));
+    dev = [Math.max(1, Math.round(hr.width * dpr)), Math.max(1, Math.round(hr.height * dpr))];
+    cells = [Math.ceil(dev[0] / CELL), Math.ceil(dev[1] / CELL)];
+    canvas.width = dev[0];
+    canvas.height = dev[1];
+    gl.activeTexture(gl.TEXTURE3);
+    gl.bindTexture(gl.TEXTURE_2D, fieldTex);
+    gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, cells[0], cells[1], 0, gl.RGBA, gl.UNSIGNED_BYTE, null);
+    gl.bindFramebuffer(gl.FRAMEBUFFER, fbo);
+    gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, fieldTex, 0);
+    gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+    rebuildUI();
+  }
+
+  let pending = 0;
+  new ResizeObserver(() => {
+    cancelAnimationFrame(pending);
+    pending = requestAnimationFrame(() => {
+      resize();
+      if (reduce) draw();
+    });
   }).observe(hero);
   resize();
+  document.fonts?.ready.then(rebuildUI);
 
-  // CSS px in the hero (y down) → cells (y up)
-  const toCells = (x, y) => [x * s, (canvasCssH - y) * s];
+  // client px → device px with y up
+  const toDev = (x, y) => [(x - hr.left) * dpr, (hr.bottom - y) * dpr];
+  const rectDev = (r) => {
+    const [x0, y0] = toDev(r.left, r.bottom);
+    const [x1, y1] = toDev(r.right, r.top);
+    return [x0, y0, x1, y1];
+  };
+  const waveData = new Float32Array(16);
+
+  function setCommon(U) {
+    const e = state.e;
+    const [ex, ey] = toDev(e.x + hr.left, e.y + hr.top);
+    gl.uniform2f(U.uDev, dev[0], dev[1]);
+    gl.uniform3f(U.uE, ex, ey, e.str);
+    gl.uniform2f(U.uEV, e.vx * dpr, -e.vy * dpr);
+    gl.uniform1f(U.uER, ELECTRON_R * dpr);
+    gl.uniform4fv(U["uW[0]"], waveData);
+    gl.uniform1f(U.uTime, state.time);
+    gl.uniform2f(U.uCells, cells[0], cells[1]);
+    gl.uniform1f(U.uCell, CELL);
+    gl.uniform1f(U.uUi, state.ui);
+    gl.uniform4fv(U.uHot, state.hotRect);
+    gl.uniform1f(U.uHotAmt, state.hotAmt);
+  }
 
   function draw() {
-    const hr = hero.getBoundingClientRect();
+    // waves → uniforms
+    const now = state.time;
+    for (let i = 0; i < MAX_WAVES; i++) {
+      const w = state.waves[i];
+      const age = w ? now - w.t0 : -1;
+      const [wx, wy] = w ? toDev(w.x + hr.left, w.y + hr.top) : [0, 0];
+      waveData.set([wx, wy, w ? age : -1, w ? Math.pow(1 - clamp01(age / WAVE_LIFE), 2) : 0], i * 4);
+    }
+
+    // pass 1: the field, one fragment per cell
+    gl.bindFramebuffer(gl.FRAMEBUFFER, fbo);
+    gl.viewport(0, 0, cells[0], cells[1]);
+    gl.useProgram(field);
+    setCommon(UF);
     const [l, t, w, h] = state.logoCss;
-    const [lx, ly] = toCells(l - hr.left, t - hr.top + h);
-    gl.uniform4f(U.logo, lx, ly, w * s, h * s);
-    gl.uniform1f(U.tpc, wm.ch / Math.max(1, h * s));
-    const [px, py] = toCells(state.light[0], state.light[1]);
-    gl.uniform2f(U.light, px, py);
-    gl.uniform2f(U.vel, state.lightVel[0] / viewH, -state.lightVel[1] / viewH);
-    gl.uniform1f(U.time, state.time);
-    gl.uniform1f(U.hover, state.hover);
-    gl.uniform1f(U.intro, state.intro);
-    gl.uniform2fv(U.flip, flipUniform);
+    const [lx, ly] = toDev(l, t + h);
+    gl.uniform4f(UF.uLogo, lx / CELL, ly / CELL, (w * dpr) / CELL, (h * dpr) / CELL);
+    gl.uniform1f(UF.uTexPerCell, wm.ch / Math.max(1, (h * dpr) / CELL));
+    gl.uniform1f(UF.uIntro, state.intro);
+    gl.uniform2fv(UF["uFlip[0]"], flipUniform);
+    const b = state.blob;
+    const [bx, by] = toDev(b.x + hr.left, b.y + hr.top);
+    gl.uniform4f(UF.uBlob, bx, by, b.str, b.letter);
+    gl.uniform4fv(UF.uFocus, state.focusRect ? rectDev(state.focusRect) : [0, 0, 0, 0]);
+    gl.uniform1f(UF.uFocusAmt, state.focusAmt);
+    gl.drawArrays(gl.TRIANGLES, 0, 3);
+
+    // pass 2: compose at device pixels
+    gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+    gl.viewport(0, 0, dev[0], dev[1]);
+    gl.useProgram(compose);
+    setCommon(UC);
+    // small type only feels a quarter of the electron's push, so a hovered link stays readable
+    const [ex, ey] = toDev(state.e.x + hr.left, state.e.y + hr.top);
+    gl.uniform3f(UC.uE, ex, ey, state.e.str * 0.25);
     gl.drawArrays(gl.TRIANGLES, 0, 3);
   }
 
@@ -691,25 +782,181 @@ function createScene() {
     html.classList.remove("gl");
   });
 
-  return { draw };
+  return { draw, rebuildUI, rectDev };
 }
 
-// ------------------------------------------------------------------ pointer
+// ------------------------------------------------------------------ the electron and the sticky bubble
+// State machine (see README): FREE ⇄ STUCK(i).
+//   FREE → STUCK(i): the electron comes within ENTER of letter i's edge (and i is re-armed). Letter i flips.
+//   STUCK(i): a bubble grows out of i toward the electron, anchored at most MAX_PULL from i.
+//     · pulled past MAX_PULL and within ENTER of another letter j → STUCK(j) (capture hands over, j flips)
+//     · pulled past MAX_PULL with no letter near → FREE (the neck snaps back)
+//     · direction change: the electron travels TURN_BACK back against the direction it was captured in
+//       → FREE; it then captures the next letter it reaches in the new direction
+//     · the electron leaves (pointer out / finger up) → FREE
+//   A released letter re-arms once the electron is REARM × ENTER away from it.
+function wordmarkPoint(x, y) {
+  // hero CSS px → wordmark units (u across, v up) and the aspect ratio
+  const hr = hero.getBoundingClientRect();
+  const [l, t, w, h] = state.logoCss;
+  return { qx: (x + hr.left - l) / w, qy: (t + h - (y + hr.top)) / h, aspect: w / h, h, w };
+}
+
+function distances(x, y) {
+  const p = wordmarkPoint(x, y);
+  const d = [];
+  for (let i = 0; i < LETTERS; i++) d.push(-letterDistance(i, p.qx, p.qy, p.aspect)); // + outside, in h
+  return { d, p };
+}
+
+function capture(i, now) {
+  state.stuck = i;
+  state.blob.letter = i;
+  state.capDir = Math.abs(state.e.vx) > 30 ? Math.sign(state.e.vx) : 1;
+  state.capExtreme = state.capDir * state.e.x;
+  state.rearm[i] = false;
+  startFlip(i, now);
+}
+
+function release() {
+  if (state.stuck >= 0) state.rearm[state.stuck] = false;
+  state.stuck = -1;
+}
+
+function updateSticky(now) {
+  if (!wordmarkSD || !flipsArmed) return;
+  const e = state.e;
+  const { d, p } = distances(e.x, e.y);
+  for (let i = 0; i < LETTERS; i++) if (i !== state.stuck && d[i] > ENTER * REARM) state.rearm[i] = true;
+
+  if (!e.on) {
+    release();
+  } else if (state.stuck < 0) {
+    let best = -1;
+    for (let i = 0; i < LETTERS; i++) if (state.rearm[i] && d[i] < ENTER && (best < 0 || d[i] < d[best])) best = i;
+    if (best >= 0) capture(best, now);
+  } else {
+    const i = state.stuck;
+    state.capExtreme = Math.max(state.capExtreme, state.capDir * e.x);
+    const turnedBack = state.capExtreme - state.capDir * e.x > TURN_BACK * p.h;
+    if (turnedBack) {
+      release();
+    } else if (d[i] > MAX_PULL) {
+      let next = -1;
+      for (let j = 0; j < LETTERS; j++) if (j !== i && d[j] < ENTER && (next < 0 || d[j] < d[next])) next = j;
+      if (next >= 0) capture(next, now);
+      else release();
+    }
+  }
+
+  // the bubble's anchor: the electron, or the point MAX_PULL out of the letter toward it
+  const b = state.blob;
+  let tx = e.x;
+  let ty = e.y;
+  if (state.stuck >= 0) {
+    const i = state.stuck;
+    const di = d[i];
+    if (di > MAX_PULL) {
+      // step back toward the letter along the distance gradient
+      const eps = 0.02 * p.h;
+      const dx = distances(e.x + eps, e.y).d[i] - distances(e.x - eps, e.y).d[i];
+      const dy = distances(e.x, e.y + eps).d[i] - distances(e.x, e.y - eps).d[i];
+      const gl = Math.hypot(dx, dy) || 1;
+      const back = (di - MAX_PULL) * p.h;
+      tx = e.x - (dx / gl) * back;
+      ty = e.y - (dy / gl) * back;
+    }
+  }
+  return { tx, ty };
+}
+
+// one semi-implicit step of a damped spring: o[k] moves toward target, o[v] is its velocity.
+// [ω, ζ]: ζ = 1 is critically damped (fastest without overshoot), below 1 it swings a little past.
+function spring(o, k, v, target, [w, z], dt) {
+  o[v] += (w * w * (target - o[k]) - 2 * z * w * o[v]) * dt;
+  o[k] += o[v] * dt;
+}
+
+// ------------------------------------------------------------------ pointer, clicks, focus
+function setTarget(e) {
+  const r = hero.getBoundingClientRect();
+  const st = state.e;
+  st.tx = e.clientX - r.left;
+  st.ty = e.clientY - r.top;
+  if (!st.on) {
+    // a new electron appears where the pointer is, without sweeping in from far away
+    st.x = st.tx;
+    st.y = st.ty;
+    st.vx = st.vy = 0;
+    state.blob.x = st.x;
+    state.blob.y = st.y;
+  }
+  st.on = true;
+}
+
 window.addEventListener(
   "pointermove",
   (e) => {
-    const r = hero.getBoundingClientRect();
-    state.target[0] = e.clientX - r.left;
-    state.target[1] = e.clientY - r.top;
-    state.lastPointer = performance.now();
-    state.inside = true;
-    pointerLetter(e, false);
+    if (e.pointerType === "touch" && e.buttons === 0) return;
+    setTarget(e);
+    if (!scene) fallbackFlip(e, false);
+    updateHover(e.clientX, e.clientY);
   },
   { passive: true }
 );
-window.addEventListener("pointerdown", (e) => pointerLetter(e, true), { passive: true }); // taps flip letters on touch screens
-html.addEventListener("pointerleave", () => {
-  state.inside = false;
+window.addEventListener(
+  "pointerdown",
+  (e) => {
+    setTarget(e);
+    if (!scene) return fallbackFlip(e, true);
+    updateHover(e.clientX, e.clientY);
+    if (reduce || e.target.closest("a")) return;
+    // a click on the background (not a link, not inside a letter) sends a wave across the screen
+    const r = hero.getBoundingClientRect();
+    const x = e.clientX - r.left;
+    const y = e.clientY - r.top;
+    if (wordmarkSD && Math.min(...distances(x, y).d) < 0) return;
+    state.waves.push({ x, y, t0: state.time });
+    if (state.waves.length > MAX_WAVES) state.waves.shift();
+  },
+  { passive: true }
+);
+const electronOff = (e) => {
+  if (e.type === "pointerleave" || e.pointerType === "touch") state.e.on = false;
+};
+window.addEventListener("pointerup", electronOff, { passive: true });
+window.addEventListener("pointercancel", electronOff, { passive: true });
+html.addEventListener("pointerleave", electronOff);
+
+let hoverList = [];
+function updateHover(x, y) {
+  if (!scene) return;
+  const hit = hoverList.find(({ rect: r }) => x >= r.left && x <= r.right && y >= r.top && y <= r.bottom);
+  if (hit && hit !== state.hot) state.hotRect = scene.rectDev(hit.rect);
+  state.hot = hit || null;
+  if (reduce) {
+    state.hotAmt = hit ? 1 : 0;
+    scene.draw();
+  }
+}
+function refreshTargets() {
+  hoverList = hoverTargets(elements.list);
+}
+
+document.addEventListener("focusin", (e) => {
+  const a = e.target.closest?.(".links a");
+  state.focusRect = a && a.matches(":focus-visible") ? a.getBoundingClientRect() : null;
+  if (reduce) {
+    state.focusAmt = state.focusRect ? 1 : 0;
+    scene?.draw();
+  }
+});
+document.addEventListener("focusout", () => {
+  state.focusRect = null;
+  if (reduce) {
+    state.focusAmt = 0;
+    scene?.draw();
+  }
 });
 
 // ------------------------------------------------------------------ loop
@@ -717,28 +964,11 @@ const scene = createScene();
 if (scene) html.classList.add("gl");
 
 measureLogo();
-new ResizeObserver(measureLogo).observe(hero);
-
-// the light starts resting just off the wordmark's upper left, where it will idle from
-function idleTarget(t) {
-  const hr = hero.getBoundingClientRect();
-  const [l, top, w, h] = state.logoCss;
-  const cx = l - hr.left + w / 2;
-  const cy = top - hr.top + h / 2;
-  // two incommensurate slow sines: a wandering, never-repeating drift over the wordmark
-  return [
-    cx + w * (0.34 * Math.sin(t * 0.19) + 0.1 * Math.sin(t * 0.47 + 2.0)),
-    cy + h * (0.9 * Math.sin(t * 0.31 + 1.0) + 0.35 * Math.sin(t * 0.13)),
-  ];
-}
-{
-  // reduced motion: one still frame, the light parked above the wordmark's upper left
-  const [l, top, w] = state.logoCss;
-  const hr = hero.getBoundingClientRect();
-  const [x, y] = reduce ? [l - hr.left + w * 0.3, top - hr.top - w * 0.12] : idleTarget(0);
-  state.light = [x, y];
-  state.target = [x, y];
-}
+refreshTargets();
+new ResizeObserver(() => {
+  measureLogo();
+  refreshTargets();
+}).observe(hero);
 
 let visible = true;
 new IntersectionObserver(([en]) => (visible = en.isIntersecting)).observe(hero);
@@ -751,29 +981,30 @@ function frame(now) {
   const dtMs = now - last;
   if (dtMs < (coarse ? 32 : 15)) return; // ~30fps on touch devices, ~60fps elsewhere
   last = now;
-  const dt = Math.min(dtMs, 64) / 1000;
-
+  const dt = Math.min(dtMs, 50) / 1000;
   state.time = (now - t0) / 1000;
 
-  // when nobody is steering, the light wanders slowly over the wordmark by itself
-  const idle = now - state.lastPointer > 3000;
-  const [tx, ty] = idle ? idleTarget(state.time) : state.target;
-
-  // the light hangs on a soft spring: it lags, swings a little past, and settles
-  const k = idle ? 6 : 34;
-  const c = idle ? 5 : 9.5;
-  for (let a = 0; a < 2; a++) {
-    const tgt = a === 0 ? tx : ty;
-    state.lightVel[a] += ((tgt - state.light[a]) * k - state.lightVel[a] * c) * dt;
-    state.light[a] += state.lightVel[a] * dt;
-  }
-  const ease = 1 - Math.exp(-dt * (state.inside && !idle ? 2.2 : 0.9));
-  state.hover += ease * ((state.inside && !idle ? 1 : 0) - state.hover);
+  const e = state.e;
+  spring(e, "x", "vx", e.tx, ELECTRON_SPRING, dt);
+  spring(e, "y", "vy", e.ty, ELECTRON_SPRING, dt);
+  spring(e, "str", "sv", e.on ? 1 : 0, [14, 1], dt);
+  e.str = clamp01(e.str);
 
   updateFlips(now);
+  const { tx, ty } = updateSticky(now) || { tx: e.x, ty: e.y };
+  const b = state.blob;
+  spring(b, "x", "vx", tx, BUBBLE_SPRING, dt);
+  spring(b, "y", "vy", ty, BUBBLE_SPRING, dt);
+  spring(b, "str", "sv", state.stuck >= 0 ? 1 : 0, [state.stuck >= 0 ? 11 : 16, 1], dt);
+  b.str = clamp01(b.str);
+
+  const k = 1 - Math.exp(-dt * 12);
+  state.hotAmt += k * ((state.hot ? 1 : 0) - state.hotAmt);
+  state.focusAmt += k * ((state.focusRect ? 1 : 0) - state.focusAmt);
+  state.waves = state.waves.filter((w) => state.time - w.t0 < WAVE_LIFE);
+
   scene?.draw();
 }
-
 // ------------------------------------------------------------------ boot sequence
 function tween(ms, fn) {
   return new Promise((resolve) => {
@@ -800,55 +1031,53 @@ const forced = new URLSearchParams(location.search).has("boot");
 async function boot() {
   if (reduce) {
     html.classList.add("ready");
-    if (scene) scene.draw();
-    else flipSvg();
+    if (scene) {
+      await document.fonts?.ready;
+      scene.rebuildUI();
+      scene.draw();
+    } else flipSvg();
     return;
   }
 
   requestAnimationFrame(frame);
+  const uiIn = () => tween(900, (t) => (state.ui = t));
 
   if (seen && !forced) {
     // returning visitor: skip the console, keep the entrance
     html.classList.add("quick");
-    await tween(1600, (t) => {
-      state.intro = t;
-    });
+    await tween(1600, (t) => (state.intro = t));
     html.classList.remove("booting");
     html.classList.add("ready");
     flipsArmed = true;
+    await uiIn();
     return;
   }
 
   const count = hero.querySelector("[data-count]");
   const bar = hero.querySelector("[data-bar]");
   const lines = [...hero.querySelectorAll(".boot__log li")];
-
   lines.forEach((li, i) => setTimeout(() => li.classList.add("on"), 250 + i * 380));
 
-  // the counter runs; as it nears 100 the field starts filling in and the letters dissolve into view
+  // the counter runs; as it nears 100 the field fills in and the letters dissolve into view
   const counter = tween(2000, (t) => {
     const e = easeInOutCubic(t);
     count.textContent = String(Math.round(e * 100)).padStart(3, "0");
     bar.style.transform = `scaleX(${e})`;
   });
-  const entrance = wait(1450).then(() =>
-    tween(2100, (t) => {
-      state.intro = t;
-    })
-  );
+  const entrance = wait(1450).then(() => tween(2100, (t) => (state.intro = t)));
 
   await counter;
   html.classList.add("boot-done");
   await Promise.all([entrance, wait(260)]);
   html.classList.remove("booting");
   html.classList.add("ready");
-  flipsArmed = true; // from now on, letters flip when the pointer touches them
-
+  flipsArmed = true;
   try {
     sessionStorage.setItem("cc-boot", "1");
   } catch {
     /* storage unavailable: the boot simply plays again next time */
   }
+  await uiIn();
 }
 
 boot();
