@@ -1,8 +1,8 @@
-// cardozo.cc hero — one canvas of dots. Every element of the interface (the CRDZC wordmark and the links)
-// is rendered *into* a single dithered dot field; the pointer is an "electron" that pushes that field
-// around; letters flip when it enters them; a click on the background sends a wave across the screen.
-// No dependencies. Everything degrades: no JS → static page; no WebGL → the SVG wordmark and the DOM
-// links; prefers-reduced-motion → one still frame (still in dots), no boot, no flips, no waves.
+// cardozo.cc hero — one canvas of dots. The CRDZC wordmark is drawn into a single dithered dot field; each letter
+// is a link that flips on its own timer into the brand mark of its link and back; the pointer is an "electron"
+// that pushes the field around; a click on the background sends a ripple across the screen; loading is the
+// wordmark building itself out of the dots. No dependencies. Everything degrades: no JS → the SVG letters as
+// links; no WebGL → the same SVG, flipping in SVG; prefers-reduced-motion → one still frame (still in dots).
 
 import { distanceTransform, roundCorners, blueNoise } from "./raster.js";
 import { BRANDS } from "./brands.js";
@@ -34,8 +34,10 @@ const FLIP_EVERY = [4000, 6000]; // ms between a letter's flips (each letter on 
 const FLIP_FIRST = [1500, 5000]; // ms before a letter's first flip, so they never flip together
 const FLIP_DUR = [760, 980]; // ms per flip
 const POSTPONE = 700; // ms a due flip waits while its letter is hovered or focused
-const WAVE_LIFE = 4.6; // s: a wave's whole life (slow decay)
+const WAVE_LIFE = 2.6; // s: a wave's whole life (it passes the farthest corner, then fades)
 const MAX_WAVES = 6;
+const BUILD_MS = 3000; // ms: the wordmark building itself out of the dots, first visit (or ?boot)
+const BUILD_QUICK_MS = 1400; // ms: the same, for a returning visitor in this session
 
 // ------------------------------------------------------------------ shared state
 const state = {
@@ -249,8 +251,9 @@ function brandBox(i) {
 }
 
 // Rasterise shapes (drawn by `draw(ctx)` in viewBox units) into the texture layout both faces share:
-//   R coverage · G distance to the edge inside · B closeness to a shape outside. Corners are rounded first.
-function buildMaskTexture(draw, rOpen, rClose) {
+//   R coverage · G distance to the edge inside · B closeness to a shape outside · A tone (0..1, drawn by
+//   `tone(ctx)` in greys; 1 where nothing is drawn). Corners are rounded first.
+function buildMaskTexture(draw, rOpen, rClose, tone) {
   const cw = Math.round(VBW * TEXELS_PER_UNIT);
   const ch = Math.round(VBH * TEXELS_PER_UNIT);
   const tw = cw + MARGIN * 2;
@@ -269,6 +272,16 @@ function buildMaskTexture(draw, rOpen, rClose) {
 
   const rgba = ctx.getImageData(0, 0, tw, th).data;
   const n = tw * th;
+  let tones = null;
+  if (tone) {
+    ctx.setTransform(1, 0, 0, 1, 0, 0);
+    ctx.fillStyle = "#fff";
+    ctx.fillRect(0, 0, tw, th);
+    ctx.translate(MARGIN, MARGIN);
+    ctx.scale(TEXELS_PER_UNIT, TEXELS_PER_UNIT);
+    tone(ctx);
+    tones = ctx.getImageData(0, 0, tw, th).data;
+  }
   const raw = new Uint8Array(n);
   for (let i = 0; i < n; i++) raw[i] = rgba[i * 4] > 127 ? 1 : 0;
   const solid = roundCorners(raw, tw, th, rOpen, rClose);
@@ -280,7 +293,7 @@ function buildMaskTexture(draw, rOpen, rClose) {
     data[i * 4] = solid[i] * 255;
     data[i * 4 + 1] = Math.round(clamp01(inside[i] / DEPTH) * 255);
     data[i * 4 + 2] = Math.round(clamp01(1 - outside[i] / HALO) * 255);
-    data[i * 4 + 3] = 255;
+    data[i * 4 + 3] = tones ? tones[i * 4] : 255;
   }
   return { data, tw, th, cw, ch };
 }
@@ -289,19 +302,45 @@ function buildMaskTexture(draw, rOpen, rClose) {
 const buildWordmarkTexture = () =>
   buildMaskTexture((ctx) => logoSvg.querySelectorAll(".lt path").forEach((p) => ctx.fill(new Path2D(p.getAttribute("d")))), ROUND_OPEN, ROUND_CLOSE);
 
-// the brand face: each letter's brand mark, upright, in the same place as its letter
+// the brand face: each letter's brand mark, upright, in the same place as its letter. A mark with `tones`
+// (the envelope) is its body minus a cut-out gap, with grey tone layers painted into the alpha channel.
+function placeBrand(ctx, i, fn) {
+  const [x, y, size] = brandBox(i);
+  ctx.save();
+  ctx.translate(x, y);
+  ctx.scale(size / 24, size / 24);
+  fn(BRANDS[LETTER_BRANDS[i]]);
+  ctx.restore();
+}
 const buildBrandTexture = () =>
   buildMaskTexture(
     (ctx) =>
-      LETTER_BRANDS.forEach((key, i) => {
-        const [x, y, size] = brandBox(i);
-        ctx.save();
-        ctx.translate(x, y);
-        ctx.scale(size / 24, size / 24);
-        ctx.fill(new Path2D(BRANDS[key].d), BRANDS[key].evenodd ? "evenodd" : "nonzero");
-        ctx.restore();
-      }),
-    ...BRAND_ROUND
+      LETTER_BRANDS.forEach((_, i) =>
+        placeBrand(ctx, i, (b) => {
+          if (!b.tones) return ctx.fill(new Path2D(b.d), b.evenodd ? "evenodd" : "nonzero");
+          ctx.fill(new Path2D(b.body));
+          ctx.globalCompositeOperation = "destination-out";
+          ctx.lineWidth = b.gapWidth;
+          ctx.lineJoin = "round";
+          ctx.stroke(new Path2D(b.gap));
+          ctx.globalCompositeOperation = "source-over";
+        })
+      ),
+    ...BRAND_ROUND,
+    (ctx) =>
+      LETTER_BRANDS.forEach((_, i) =>
+        placeBrand(ctx, i, (b) => {
+          if (!b.tones) return;
+          ctx.save();
+          ctx.clip(new Path2D(b.body));
+          for (const [d, v] of b.tones) {
+            const g = Math.round(v * 255);
+            ctx.fillStyle = `rgb(${g},${g},${g})`;
+            ctx.fill(new Path2D(d));
+          }
+          ctx.restore();
+        })
+      )
   );
 
 // ------------------------------------------------------------------ shaders
@@ -327,13 +366,15 @@ uniform sampler2D uBlue;
 #define RING 0.75          // density piled up where the pushed field compresses
 #define THIN 0.6           // density cleared inside the electron's reach (around its core)
 #define WAKE 0.5           // density in the short wake behind a moving electron
-#define WAVE_SPEED 0.55    // screen heights per second (passes the farthest corner within its life)
-#define WAVE_WIDTH 0.06    // screen heights: the ring's half-width
-#define WAVE_PUSH 0.016    // screen heights: how far the ring displaces the dots
-#define WAVE_DENS 0.8      // density/brightness swell at the front
-#define WAVE_ECHO 0.45     // first trailing echo (pushes the other way), × the front
-#define WAVE_ECHO2 0.2     // second trailing echo
-#define WAVE_GAP 2.6       // spacing of the echoes, in ring half-widths
+#define WAVE_SPEED 1.05    // screen heights per second (passes the farthest corner within its life)
+#define WAVE_WIDTH 0.1     // screen heights: the ring's half-width (a long, smooth swell)
+#define WAVE_PUSH 0.018    // screen heights: how far the ring displaces the dots
+#define WAVE_DENS 1.0      // density/brightness swell at the front
+#define WAVE_ECHO 0.5      // the one trailing echo (pushes the other way), × the front
+#define WAVE_GAP 2.4       // its distance behind the front, in ring half-widths
+#define ORB_2 0.16         // the electron's orbital: 2-, 3- and 5-lobed harmonics of its radius
+#define ORB_3 0.11
+#define ORB_5 0.06
 
 float blue(vec2 p) {
   return texture2D(uBlue, (mod(p, 64.0) + 0.5) / 64.0).r;
@@ -341,21 +382,35 @@ float blue(vec2 p) {
 
 // returns the displacement (device px) to subtract from a sample position, and in .z the extra density
 // where the field is compressed (the ring around the electron, its wake, the wave fronts)
+// the electron's cloud is an orbital, not a circle: its radius follows a few slowly turning angular
+// harmonics (lobed, breathing, never the same twice), stretched a little along the motion
+float orbital(vec2 dir, float fast) {
+  float a = atan(dir.y, dir.x);
+  float t = uTime;
+  float m = 1.0
+    + ORB_2 * sin(2.0 * a + t * 0.63)
+    + ORB_3 * sin(3.0 * a - t * 0.91 + 1.7)
+    + ORB_5 * sin(5.0 * a + t * 1.37 + 0.4);
+  float sp = length(uEV);
+  if (sp > 1.0) m += 0.22 * fast * abs(dot(dir, uEV / sp));
+  return m;
+}
+
 vec3 pushAt(vec2 p) {
   vec3 o = vec3(0.0);
   vec2 d = p - uE.xy;
   float r = length(d) + 0.001;
   vec2 dir = d / r;
-  float R = uER;
-  float f = uE.z * exp(-(r * r) / (R * R));
   float sp = length(uEV);
-  float fast = clamp(sp / (R * 14.0), 0.0, 1.0);
+  float fast = clamp(sp / (uER * 14.0), 0.0, 1.0);
+  float R = uER * orbital(dir, fast);
+  float f = uE.z * exp(-(r * r) / (R * R));
   vec2 perp = vec2(-dir.y, dir.x);
   // like a charge moving through a field: pushed outward, and bent sideways relative to the motion
   float side = sign(dir.x * uEV.y - dir.y * uEV.x);
   o.xy += dir * PUSH_AMT * R * f;
   o.xy += perp * side * DEFLECT * R * f * fast;
-  o.z += uE.z * RING * exp(-pow((r - 1.15 * R) / (0.4 * R), 2.0));
+  o.z += uE.z * RING * exp(-pow((r - 1.15 * R) / (0.45 * R), 2.0));
   o.z -= uE.z * THIN * exp(-pow(r / (0.8 * R), 2.0)); // pushed out: thinner inside, bunched at the rim
   if (sp > 1.0) {
     vec2 tail = uE.xy - uEV * 0.07;
@@ -368,12 +423,11 @@ vec3 pushAt(vec2 p) {
     float rw = length(dw) + 0.001;
     float front = w.z * WAVE_SPEED * uDev.y;
     float x = (rw - front) / (WAVE_WIDTH * uDev.y);
-    // a ripple: the front pushes out, the echoes behind it pull back in, each softer than the last
+    // two long rings: the front pushes out, one softer echo behind it pulls back in
     float r0 = exp(-x * x);
     float r1 = WAVE_ECHO * exp(-pow(x + WAVE_GAP, 2.0));
-    float r2 = WAVE_ECHO2 * exp(-pow(x + 2.0 * WAVE_GAP, 2.0));
-    o.xy += dw / rw * (r0 - r1 + r2) * w.w * WAVE_PUSH * uDev.y;
-    o.z += (r0 + r1 + r2) * w.w * WAVE_DENS;
+    o.xy += dw / rw * (r0 - r1) * w.w * WAVE_PUSH * uDev.y;
+    o.z += (r0 + r1) * w.w * WAVE_DENS;
   }
   return o;
 }
@@ -389,6 +443,8 @@ precision highp float;
 #define DENS_WAVE 0.25     // swing of the slow brightness wave inside letters
 #define DENS_E 0.3         // extra letter density around the electron
 #define EDGE_SOFT 3.6      // letter edge: width of the density ramp, in cells (merges with the field)
+#define TONE_DENS 0.3      // dot density of a face's darkest tone layer (the envelope's sides), × full
+#define TONE_BRIGHT 0.5    // …and its brightness
 #define MORPH_THIN 0.7     // how much the shape thins out around the face swap
 #define MORPH_CLOUD 0.55   // how dense the cloud of dots in flight gets at the swap
 #define EDGE_HOVER 0.3     // … × this right around the electron (crisper there)
@@ -453,7 +509,7 @@ float fieldAt(vec2 p) {
 float densityAt(vec2 p) {
   float yv = p.y / uCells.y;
   float calm = smoothstep(0.0, 0.15, min(yv, 1.0 - yv)); // breathing room behind the labels
-  float fill = smoothstep(0.0, 1.0, uIntro * 1.25);
+  float fill = mix(0.45, 1.0, smoothstep(0.0, 0.5, uIntro)); // the quiet field is there from the start
   return (0.06 + 0.94 * fieldAt(p)) * (0.35 + 0.65 * calm) * fill;
 }
 // full resolution around the wordmark, around the electron and on the wave fronts
@@ -510,7 +566,8 @@ vec4 maskAt(vec2 tc, float brand) {
 }
 // signed distance (cells, + inside) to letter li as currently flipped; it keeps growing outside the
 // letter's column, so a squeezed (flipping) letter never picks up its neighbour's shape
-float letterSD(float li, vec2 q, float aspect) {
+// returns (signed distance, face tone)
+vec2 letterSD(float li, vec2 q, float aspect) {
   vec2 fs = flipFor(li);
   float cu = letterCenter(li);
   vec2 qf = vec2(cu + (q.x - cu) / fs.x, 0.5 + (q.y - 0.5) / fs.y);
@@ -519,7 +576,7 @@ float letterSD(float li, vec2 q, float aspect) {
   float extra = length((qf - qc) * vec2(aspect, 1.0)) * uLogo.w;
   vec4 t = maskAt(qc * uTexScale + uTexOff, faceFor(li).x);
   float tpc = uTexPerCell / max(min(abs(fs.x), abs(fs.y)), 0.15);
-  return (t.r > 0.5 ? t.g * DEPTH_TX : -(1.0 - t.b) * HALO_TX) / tpc - extra;
+  return vec2((t.r > 0.5 ? t.g * DEPTH_TX : -(1.0 - t.b) * HALO_TX) / tpc - extra, t.a);
 }
 
 void main() {
@@ -573,7 +630,7 @@ void main() {
     float spot = floor(sz * 0.5 - 0.5);
     float isDot = step(abs(inBlk.x - spot) + abs(inBlk.y - spot), 0.0);
     float hb = hash2(blk * 1.31 + sz);
-    float present = step(hb, (0.45 + 1.4 * D) * smoothstep(0.0, 0.7, uIntro));
+    float present = step(hb, 0.45 + 1.4 * D);
     on = isDot * present;
     tone = (0.2 + 0.12 * D) * (1.0 - TWINKLE * tw);
   } else {
@@ -583,12 +640,9 @@ void main() {
     float li = letterIndex(q.x);
     vec2 fs = flipFor(li);
 
-    // entrance: each letter dissolves in, one after the other, drifting up a little
-    float e = clamp(uIntro * 1.6 - li * 0.12, 0.0, 1.0);
-    float eo = 1.0 - pow(1.0 - e, 3.0);
-    vec2 qr = q - vec2(0.0, 0.18 * (1.0 - eo));
-
-    float sd = letterSD(li, qr, aspect);
+    vec2 sdt = letterSD(li, q, aspect);
+    float sd = sdt.x;
+    float ftone = sdt.y; // the face's tone (the envelope's layers); 1 elsewhere
 
     vec2 pc = (cs - (uLogo.xy + 0.5 * uLogo.zw)) / uCells.y;
     float nz = vnoise(vec3(pc * 4.5, uTime * 0.07)) * 0.65 + vnoise(vec3(pc * 11.0 + 3.0, uTime * 0.11)) * 0.35;
@@ -598,7 +652,15 @@ void main() {
     // density ramp roughened by noise (dots stray out, gaps open in), crisper right around the electron.
     float rough = (vnoise(vec3(c * 0.3, uTime * 0.25)) - 0.5) * EDGE_NOISE;
     float soft = EDGE_SOFT * mix(1.0, EDGE_HOVER, eNear);
-    float letter = smoothstep(-soft, soft, sd + rough * mix(1.0, 0.4, eNear)) * smoothstep(0.0, 1.0, eo * 1.1);
+    float letter = smoothstep(-soft, soft, sd + rough * mix(1.0, 0.4, eNear));
+
+    // loading: the wordmark is built out of the field. A noise-warped fill line rises through each letter
+    // (staggered a little), dots gather along it and the shape fills in below it.
+    float level = clamp(uIntro * 1.3 - li * 0.06, 0.0, 1.0) * 1.3 - 0.15;
+    float y = q.y + (vnoise(vec3(q.x * 9.0, q.y * 3.0, uTime * 0.6)) - 0.5) * 0.22;
+    float built = smoothstep(-0.04, 0.04, level - y);
+    float front = exp(-pow((level - y) / 0.05, 2.0)) * step(uIntro, 0.999);
+    letter *= max(built, front * smoothstep(-soft, soft, sd + 2.0 * soft) * 0.6);
 
     // the transformation: around the face swap the shape's dots scatter through the letter's box and regather
     // into the other face (same dots, same grain: no cross-fade)
@@ -613,19 +675,26 @@ void main() {
     // ripples: clusters of ~14 cells carried by the sea, so the dots visibly gather and drift
     float rip = vnoise(vec3(cs * SEA_RIPPLE, uTime * 0.12));
     float ripple = mix(1.0, 0.35 + 1.3 * rip, clamp(0.6 + 0.6 * uEnergy, 0.0, 1.0));
-    float lumC = ((0.03 + 0.1 * nz * nz) * (1.0 + 0.6 * wave) * ripple + push.z * 0.35) * smoothstep(0.0, 0.7, uIntro);
+    // the electron's cloud flickers: each dot in it re-rolls a few times a second (no defined positions)
+    float flick = 0.55 + 0.9 * hash2(cell + floor(uTime * 9.0));
+    float lumC = ((0.03 + 0.1 * nz * nz) * (1.0 + 0.6 * wave) * ripple + push.z * 0.35 * flick);
     float edgeOn = abs(fs.x * fs.y);
-    float lumL = (DENS_L + 0.5 * wave * DENS_WAVE + DENS_E * eNear + push.z * 0.3) * (0.55 + 0.45 * edgeOn);
+    float lumL = (DENS_L + 0.5 * wave * DENS_WAVE + DENS_E * eNear + push.z * 0.3) * (0.55 + 0.45 * edgeOn) * mix(TONE_DENS, 1.0, ftone);
     float lum = mix(lumC * 1.4, lumL, letter);
     on = site * step(th, lum);
     float toneC = 0.32 + 0.3 * eNear + 0.3 * push.z;
-    float toneL = TONE_L;
+    float toneL = TONE_L * mix(TONE_BRIGHT, 1.0, ftone);
     tone = mix(toneC * (1.0 - TWINKLE * tw), toneL * (1.0 - 0.35 * TWINKLE * tw), letter);
     tint = mix(FIELD_TINT, vec3(1.0), letter);
 
-    // the electron's core: a small, precise knot of bright dots
-    float core = uE.z * (1.0 - smoothstep(CORE * 0.6, CORE, rE / uER));
-    if (site * step(th, core) > 0.5) {
+    // the electron's core: a small, precise knot of bright dots with a soft, wavy edge, and a few stray
+    // electrons farther out
+    vec2 de = (pDev - uE.xy) / max(rE, 0.001);
+    float ae = atan(de.y, de.x);
+    float rc = CORE * (1.0 + 0.18 * sin(3.0 * ae + uTime * 2.1) + 0.1 * sin(5.0 * ae - uTime * 2.9));
+    float core = uE.z * (1.0 - smoothstep(rc * 0.45, rc * 1.15, rE / uER));
+    float stray = uE.z * step(0.992, hash2(cell + floor(uTime * 7.0))) * exp(-pow((rE / uER - 1.9) / 0.55, 2.0));
+    if (site * max(step(th, core), stray) > 0.5) {
       on = 1.0;
       tone = 1.0;
       tint = vec3(1.0);
@@ -804,7 +873,7 @@ function createScene() {
       const w = state.waves[i];
       const age = w ? now - w.t0 : -1;
       const [wx, wy] = w ? toDev(w.x + hr.left, w.y + hr.top) : [0, 0];
-      waveData.set([wx, wy, w ? age : -1, w ? Math.pow(1 - clamp01(age / WAVE_LIFE), 1.4) * clamp01(age / 0.25) : 0], i * 4);
+      waveData.set([wx, wy, w ? age : -1, w ? (1 - clamp01(age / WAVE_LIFE)) * clamp01(age / 0.2) : 0], i * 4);
     }
 
     // pass 1: the field, one fragment per cell
@@ -954,7 +1023,12 @@ function frame(now) {
   const dtMs = now - last;
   if (dtMs < (coarse ? 32 : 15)) return; // ~30fps on touch devices, ~60fps elsewhere
   last = now;
-  const dt = Math.min(dtMs, 50) / 1000;
+  update(now, Math.min(dtMs, 50) / 1000);
+  scene?.draw();
+}
+
+// one step of everything that moves (dt in seconds, capped by the caller)
+function update(now, dt) {
   state.time = (now - t0) / 1000;
 
   const e = state.e;
@@ -973,10 +1047,8 @@ function frame(now) {
   const k = 1 - Math.exp(-dt * 12);
   state.focusAmt += k * ((state.focusRect ? 1 : 0) - state.focusAmt);
   state.waves = state.waves.filter((w) => state.time - w.t0 < WAVE_LIFE);
-
-  scene?.draw();
 }
-// ------------------------------------------------------------------ boot sequence
+// ------------------------------------------------------------------ loading (the wordmark builds itself)
 function tween(ms, fn) {
   return new Promise((resolve) => {
     const start = performance.now();
@@ -988,7 +1060,6 @@ function tween(ms, fn) {
     requestAnimationFrame(step);
   });
 }
-const wait = (ms) => new Promise((r) => setTimeout(r, ms));
 
 const seen = (() => {
   try {
@@ -1003,7 +1074,6 @@ async function boot() {
   if (reduce) {
     html.classList.add("ready");
     if (scene) {
-      await document.fonts?.ready;
       scene.draw();
       // one still frame, drawn again once layout and the page have fully settled
       [120, 600, 1500].forEach((ms) => setTimeout(() => scene.draw(), ms));
@@ -1016,40 +1086,18 @@ async function boot() {
   }
 
   requestAnimationFrame(frame);
-
-  if (seen && !forced) {
-    // returning visitor: skip the console, keep the entrance
-    html.classList.add("quick");
-    await tween(1600, (t) => (state.intro = t));
-    html.classList.remove("booting");
-    html.classList.add("ready");
-    armFlips(performance.now());
-    return;
-  }
-
-  const count = hero.querySelector("[data-count]");
-  const bar = hero.querySelector("[data-bar]");
-  const lines = [...hero.querySelectorAll(".boot__log li")];
-  lines.forEach((li, i) => setTimeout(() => li.classList.add("on"), 250 + i * 380));
-
-  // the counter runs; as it nears 100 the field fills in and the letters dissolve into view
-  const counter = tween(2000, (t) => {
-    const e = easeInOutCubic(t);
-    count.textContent = String(Math.round(e * 100)).padStart(3, "0");
-    bar.style.transform = `scaleX(${e})`;
-  });
-  const entrance = wait(1450).then(() => tween(2100, (t) => (state.intro = t)));
-
-  await counter;
-  html.classList.add("boot-done");
-  await Promise.all([entrance, wait(260)]);
+  // Loading is the wordmark being built out of the dots. By now the textures are built and the first frame is
+  // queued, so this is a minimum duration, eased: the full build on a first visit, a short one after that.
+  const full = !seen || forced;
+  html.classList.toggle("quick", !full);
+  await tween(full ? BUILD_MS : BUILD_QUICK_MS, (t) => (state.intro = easeInOutCubic(t)));
   html.classList.remove("booting");
   html.classList.add("ready");
   armFlips(performance.now());
   try {
     sessionStorage.setItem("cc-boot", "1");
   } catch {
-    /* storage unavailable: the boot simply plays again next time */
+    /* storage unavailable: the build simply plays in full again next time */
   }
 }
 
@@ -1064,6 +1112,13 @@ if (new URLSearchParams(location.search).has("debug")) {
     letters: () =>
       flips.map((f, i) => ({ i, brand: LETTER_BRANDS[i], face: f.face, flipping: f.flipping, mirror: [f.mx, f.my], inMs: Math.round(f.nextAt - performance.now()), held: held.has(i) })),
     // the field as rendered, one pixel per cell, for a client-px rect (scripted visual checks)
-    crop: (x, y, w, h, zoom) => (updateFlips(performance.now()), scene?.cropCells(x, y, w, h, zoom)),
+    crop: (x, y, w, h, zoom) => scene?.cropCells(x, y, w, h, zoom),
+    // advance everything by real time elapsed, in ≤ 16 ms steps (for scripted checks in throttled previews)
+    tick() {
+      const now = performance.now();
+      const from = Math.max(last, now - 2000);
+      for (let t = from + 16; t <= now; t += 16) update(t, 0.016);
+      last = now;
+    },
   };
 }

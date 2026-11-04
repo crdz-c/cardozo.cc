@@ -13,7 +13,6 @@ style.css    layout; under .gl the SVG stays in place but transparent (the shade
 hero.js      letter/brand textures, the dot-field shader, flips and faces, electron, waves, sea, boot
 brands.js    the five brand marks as SVG path data
 raster.js    exact distance transform, corner rounding, blue-noise threshold map
-fonts/       Big Shoulders Display (boot counter) + Geist Mono (boot console), self-hosted, OFL
 CNAME        custom domain for GitHub Pages
 ```
 
@@ -27,7 +26,9 @@ python3 -m http.server 8000
 
 Open <http://localhost:8000>. The boot sequence plays once per browser session; add `?boot` to replay it.
 `?debug` exposes `window.__hero`: live `state`, `flips`, `letters()` (each letter's face, mirror, whether it is
-flipping and ms to its next flip) and `crop(x, y, w, h, zoom)` (the field as rendered, one pixel per cell).
+flipping and ms to its next flip), `crop(x, y, w, h, zoom)` (the field as rendered, one pixel per cell) and `tick()`
+(advance everything to now in 16 ms steps, for scripted checks in previews that throttle animation frames).
+The page loads no fonts: there is no text on screen.
 
 ## Letters are links
 
@@ -50,7 +51,11 @@ in the dots. Hover has no special effect: the electron does what it does everywh
 
 - Every letter has two faces sharing one texture layout: the letter (the wordmark's own paths, corners rounded) and
   its brand mark (fitted in a 14 × 14 unit square centred on the letter, lightly rounded). Both are stored as
-  coverage + inside distance + outside distance, so a brand mark is made of the same dots, with the same soft edge.
+  coverage + inside distance + outside distance + tone, so a brand mark is made of the same dots, with the same
+  soft edge. **Tone** (texture alpha, 0..1) scales dot density (down to `TONE_DENS` 0.3) and brightness (down to
+  `TONE_BRIGHT` 0.5): the envelope uses it like Lucas's reference — a bright flap with a rounded tip (1.0), lighter
+  side triangles (0.4), a mid-tone bottom (0.68), and a cut-out gap along the flap's edge. The other marks are
+  single-tone; give a mark `tones` in `brands.js` to layer it the same way.
 - Each letter flips **on its own timer**: the first flip after `FLIP_FIRST` (1.5–5 s, so they never flip together),
   then every `FLIP_EVERY` (4–6 s). A flip takes `FLIP_DUR` (760–980 ms, quart in-out), horizontally or vertically at
   random, around the letter's centre (scale through zero).
@@ -75,24 +80,29 @@ in the dots. Hover has no special effect: the electron does what it does everywh
 - **Calm sea and afterglow.** A slow swell displaces the field's density (0.9 cells), carrying ~14-cell ripples, on top
   of per-dot twinkle and a slow brightness wave. A moving electron or a wave stirs up an energy (0..1) that enlarges
   the swell around where it happened and decays over `AFTERGLOW` (2.8 s). The letters drift only slightly meanwhile.
-- **The electron.** The pointer (or a finger while touching) on a critically damped spring (ω 26), radius 32 CSS px:
-  a bright core, the field pushed out (thinner inside, bunched at the rim), a sideways deflection with speed and a
-  short wake. Caps for fast motion: no segment is ever drawn between samples; springs are sub-stepped at ≤ 8 ms with
+- **The electron.** The pointer (or a finger while touching) on a critically damped spring (ω 26), radius 32 CSS px,
+  drawn like an atom: a small bright nucleus with a wavy edge, and around it an orbital rather than a circle — its
+  radius follows 2-, 3- and 5-lobed harmonics (`ORB_2` 0.16, `ORB_3` 0.11, `ORB_5` 0.06) that turn at different
+  speeds and stretch along the motion, so the cloud keeps changing shape. The field is pushed out along that shape
+  (thinner inside, bunched at the rim), the cloud's dots flicker (re-rolled 9×/s), a few stray electrons appear
+  farther out, plus a sideways deflection with speed and a short wake. Caps for fast motion: no segment is ever drawn between samples; springs are sub-stepped at ≤ 8 ms with
   `dt` ≤ 50 ms; deflection, wake and energy respond to at most `MAX_SPEED` (2400 px/s).
-- **Waves.** A click or tap on the background (a click on a letter opens its link instead) sends a ripple through
-  everything: speed 0.55 screen heights/s (it passes the farthest corner), life 4.6 s with a slow decay
-  ((1 − age/life)^1.4, 0.25 s fade-in), ring half-width 0.06 screen heights, push 0.016 screen heights, density swell
-  0.8, two trailing echoes (0.45 and 0.2, 2.6 half-widths apart, alternating push like water). Up to 6 overlap.
-- **Boot** (~3.5 s, first visit per session): console, counter, progress line; the field fills in and the letters
-  dissolve in. Returning visitors get only the entrance.
+- **Waves.** A click or tap on the background (a click on a letter opens its link instead) sends two long rings
+  through everything: speed 1.05 screen heights/s (past the farthest corner in about 2 s), life 2.6 s with a linear
+  decay and a 0.2 s fade-in, ring half-width 0.1 screen heights, push 0.018 screen heights, density swell 1.0, one
+  trailing echo at 0.5 strength, 2.4 half-widths behind the front, pushing the other way. Up to 6 overlap.
+- **Loading** is the wordmark building itself out of the dots: the quiet field is there at once, then a
+  noise-warped fill line rises through each letter (slightly staggered), dots gathering along it, until the resting
+  wordmark is complete; then the flips start. No text, no counter. `BUILD_MS` 3000 on a first visit (or `?boot`),
+  `BUILD_QUICK_MS` 1400 for a returning visitor in the same session.
 - **Size.** The wordmark is 39 vw wide (60 vw under 700 px), fixed in the exact centre.
 
 ## Fallbacks
 
 - **No JS:** the SVG wordmark, each letter a working link.
 - **No WebGL:** the same SVG links; the letters keep their random mirror states and flip on the same timers, swapping
-  to the brand mark (drawn as an SVG path) and back.
-- **`prefers-reduced-motion`:** one still frame in dots (redrawn for keyboard focus): no boot, no flips, no
+  to the brand mark (drawn as an SVG path, single-tone) and back.
+- **`prefers-reduced-motion`:** one still frame in dots (redrawn for keyboard focus): no build-up, no flips, no
   electron motion, no sea, no waves.
 
 ## Brand marks
@@ -100,17 +110,18 @@ in the dots. Hover has no special effect: the electron does what it does everywh
 GitHub, Medium and Dribbble come from Simple Icons 16.36.0; LinkedIn from Simple Icons 13.21.0 (the last release that
 ships it). Simple Icons is CC0-1.0 (<https://simpleicons.org>). The envelope was drawn for this site. The marks are
 trademarks of their owners and are used only to link to Lucas's own profiles. To add or change one, edit `brands.js`
-(24 × 24 path data) and `brandOf()` in `hero.js`.
+(24 × 24 path data, optional `tones`) and `brandOf()` in `hero.js`.
 
 ## Knobs
 
 Shader (`FIELD` / `PUSH` in `hero.js`): `DENS_L` 0.72 · `DENS_WAVE` 0.25 · `DENS_E` 0.3 · `EDGE_SOFT` 3.6 cells ·
 `EDGE_HOVER` 0.3 · `EDGE_NOISE` 2.2 · `TONE_L` 0.97 · `TWINKLE` 0.3 · `FIELD_TINT` · `MORPH_THIN` 0.7 · `MORPH_CLOUD` 0.55 ·
-`SEA_AMP` 0.9 · `SEA_STIR` 4.0 · `SEA_GLOBAL` 1.2 · `SEA_SCALE` 0.3 · `SEA_SPEED` 0.05 · `SEA_RIPPLE` 0.07 · `CORE` 0.32 ·
-`PUSH_AMT` 0.6 · `THIN` 0.6 · `DEFLECT` 0.35 · `RING` 0.75 · `WAKE` 0.5 · `WAVE_SPEED` 0.55 · `WAVE_WIDTH` 0.06 ·
-`WAVE_PUSH` 0.016 · `WAVE_DENS` 0.8 · `WAVE_ECHO` 0.45 · `WAVE_ECHO2` 0.2 · `WAVE_GAP` 2.6.
+`TONE_DENS` 0.3 · `TONE_BRIGHT` 0.5 · `ORB_2` 0.16 · `ORB_3` 0.11 · `ORB_5` 0.06 · `SEA_AMP` 0.9 · `SEA_STIR` 4.0 · `SEA_GLOBAL` 1.2 · `SEA_SCALE` 0.3 · `SEA_SPEED` 0.05 · `SEA_RIPPLE` 0.07 · `CORE` 0.32 ·
+`PUSH_AMT` 0.6 · `THIN` 0.6 · `DEFLECT` 0.35 · `RING` 0.75 · `WAKE` 0.5 · `WAVE_SPEED` 1.05 · `WAVE_WIDTH` 0.1 ·
+`WAVE_PUSH` 0.018 · `WAVE_DENS` 1.0 · `WAVE_ECHO` 0.5 · `WAVE_GAP` 2.4.
 JS (top of `hero.js`): `ELECTRON_R` 32 px · `ELECTRON_SPRING` [26, 1] · `AFTERGLOW` 2.8 s · `MAX_SPEED` 2400 px/s ·
-`FLIP_EVERY` 4–6 s · `FLIP_FIRST` 1.5–5 s · `FLIP_DUR` 760–980 ms · `POSTPONE` 700 ms · `WAVE_LIFE` 4.6 s ·
+`FLIP_EVERY` 4–6 s · `FLIP_FIRST` 1.5–5 s · `FLIP_DUR` 760–980 ms · `POSTPONE` 700 ms · `WAVE_LIFE` 2.6 s ·
+`BUILD_MS` 3000 · `BUILD_QUICK_MS` 1400 ·
 `MAX_WAVES` 6 · `BRAND_SIZE` 14 units · `BRAND_ROUND` [4, 3] texels · `ROUND_OPEN` / `ROUND_CLOSE` 17 / 9 texels ·
 `HORIZONTAL_BIAS` per letter. Ink #060606, paper #f0efea.
 

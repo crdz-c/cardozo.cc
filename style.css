@@ -1,35 +1,11 @@
-/* cardozo.cc — hero.
-   One screen: the CRDZC wordmark, centred, is the whole show. In WebGL it is a flat, dithered object
-   whose letters flip on hover, sitting in a field of pixels that is fine and dense at the centre and
-   coarser and sparser toward the edges. The inline SVG underneath is the fallback. Ink stage, paper
-   type, hairlines, condensed display + mono — visual direction borrowed in spirit (not code) from
-   christendijoux.com. */
-
-@font-face {
-  font-family: "Big Shoulders Display";
-  src: url("fonts/big-shoulders-display.woff2") format("woff2");
-  font-weight: 300 700;
-  font-style: normal;
-  font-display: swap;
-}
-
-@font-face {
-  font-family: "Geist Mono";
-  src: url("fonts/geist-mono.woff2") format("woff2");
-  font-weight: 400 500;
-  font-style: normal;
-  font-display: swap;
-}
+/* cardozo.cc — one screen: the CRDZC wordmark, centred. Each letter is a link. With WebGL a shader draws it
+   as dots (see hero.js); the inline SVG underneath is the accessible version and the fallback. Visual
+   direction borrowed in spirit (not code) from christendijoux.com. */
 
 :root {
   --ink: #050505;
   --paper: #f2f2ee;
-  --dim: rgba(242, 242, 238, 0.56);
-  --line: rgba(242, 242, 238, 0.14);
-  --line-strong: rgba(242, 242, 238, 0.3);
 
-  --font-display: "Big Shoulders Display", "Arial Narrow", Impact, sans-serif;
-  --font-mono: "Geist Mono", ui-monospace, "SF Mono", Menlo, monospace;
 
   --pad: clamp(16px, 2.8vw, 40px);
   --ease: cubic-bezier(0.16, 1, 0.3, 1);
@@ -55,7 +31,7 @@ html {
 body {
   background: var(--ink);
   color: var(--paper);
-  font-family: var(--font-mono);
+  font-family: system-ui, sans-serif;
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
   text-rendering: optimizeLegibility;
@@ -164,103 +140,6 @@ a {
 .logo .lt:nth-child(4) path { transition-delay: 0.21s; }
 .logo .lt:nth-child(5) path { transition-delay: 0.28s; }
 
-/* ---------------------------------------------------------------- boot */
-
-.boot {
-  --count-size: clamp(5rem, 15vw, 13rem);
-  position: absolute;
-  inset: 0;
-  z-index: 3;
-  pointer-events: none;
-  display: none;
-  transition: opacity 0.5s ease;
-}
-
-/* the console only exists while booting, and never on the quick (returning / reduced-motion) path */
-.js.booting .boot {
-  display: block;
-}
-
-.quick .boot {
-  display: none !important;
-}
-
-/* the console sits just above the counter, in the dark lower-left */
-.boot__log {
-  position: absolute;
-  left: var(--pad);
-  bottom: calc(var(--pad) + 30px + var(--count-size) * 0.8 + 22px);
-  width: min(300px, 70vw);
-  list-style: none;
-  padding: 0;
-  font-size: 11px;
-  letter-spacing: 0.1em;
-  text-transform: uppercase;
-  color: var(--dim);
-}
-
-.boot__log li {
-  display: flex;
-  justify-content: space-between;
-  padding-block: 4px;
-  opacity: 0;
-  transform: translateY(4px);
-  transition: opacity 0.4s ease, transform 0.4s ease;
-}
-
-.boot__log li::before {
-  content: "›";
-  margin-right: 8px;
-}
-
-.boot__log li span {
-  flex: 1;
-}
-
-.boot__log b {
-  font-weight: 500;
-  color: var(--paper);
-}
-
-.boot__log li.on {
-  opacity: 1;
-  transform: none;
-}
-
-.boot__count {
-  position: absolute;
-  left: var(--pad);
-  bottom: calc(var(--pad) + 30px);
-  font-family: var(--font-display);
-  font-size: var(--count-size);
-  font-weight: 300;
-  line-height: 0.8;
-  letter-spacing: 0.01em;
-  font-variant-numeric: tabular-nums;
-  color: var(--paper);
-}
-
-.boot__bar {
-  position: absolute;
-  left: var(--pad);
-  right: var(--pad);
-  bottom: calc(var(--pad) + 14px);
-  height: 1px;
-  background: var(--line);
-}
-
-.boot__bar i {
-  display: block;
-  height: 100%;
-  background: var(--paper);
-  transform: scaleX(0);
-  transform-origin: left;
-}
-
-.boot-done .boot {
-  opacity: 0;
-}
-
 /* ---------------------------------------------------------------- states
    .booting  → everything waits just off-stage.  .ready → it all settles in. */
 
@@ -296,5 +175,5 @@ a {
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .logo path, .scene, .boot { transition: none; }
+  .logo path, .scene { transition: none; }
 }
