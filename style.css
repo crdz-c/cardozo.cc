@@ -85,6 +85,7 @@ a {
 /* ---------------------------------------------------------------- stage */
 
 .hero {
+  touch-action: manipulation; /* no double-tap zoom, so a quick second tap is a tap (pinch zoom still works) */
   position: relative;
   isolation: isolate;
   display: flex;
@@ -233,6 +234,11 @@ a {
 
 .logo .ln {
   cursor: pointer;
+  /* touch: a press-and-hold is a gesture of its own (the curtain), not a link menu or a text selection */
+  -webkit-touch-callout: none;
+  -webkit-user-select: none;
+  user-select: none;
+  -webkit-tap-highlight-color: transparent;
 }
 
 .logo .ln:focus-visible {

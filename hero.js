@@ -19,7 +19,7 @@ const canvas = hero.querySelector(".scene");
 const logoSvg = hero.querySelector(".logo svg");
 
 const reduce = matchMedia("(prefers-reduced-motion: reduce)").matches;
-const coarse = matchMedia("(hover: none)").matches;
+const query = new URLSearchParams(location.search);
 
 // (the two palettes live in the shader: true black + paper for dark, true white + true black for light)
 
@@ -78,6 +78,17 @@ const ICON_R = 11; // CSS px: radius of the theme switch's icon (a moon in the d
 const ICON_IN_MS = 700;
 const THEME_MS = 1500; // the theme change runs this long, easing out (one smooth deceleration: no bursts, which stutter when squeezed)
 const THEME_COLOR = { dark: "#000000", light: "#ffffff" };
+// Touch (there is no hover, so the gestures differ; the layout does not): a tap on the wordmark reveals all the marks and
+// they stay (a tap on a revealed mark opens its link; a tap elsewhere hides them, or sends the wave if they are hidden);
+// press and hold, or drag, brings the curtain to the finger, bigger and a little above it, and never opens a link.
+const HOLD_MS = 250; // a press longer than this is a hold, not a tap
+const TOUCH_SLOP = 10; // CSS px: moving further than this turns a press into a drag
+const REVEAL_HIDE_MS = 8000; // revealed marks hide by themselves after this long untouched
+const TOUCH_CURTAIN = 1.9; // the curtain's radius on touch, × the mouse's (a fingertip would cover the mouse-sized one)…
+const TOUCH_LIFT = 24; // …and it sits this many CSS px above the finger
+// Frame time: the dots get one device px coarser (twice at most) if the frames stay slower than this on average.
+const ADAPT_MS = 26;
+const ADAPT_MAX = 2;
 const BUILD_S = 8; // s: the whole build on a first visit (or ?boot)
 const BUILD_QUICK = 2.8; // s: the whole build for a returning visitor in this session
 const CURTAIN_FROM = 0.5; // the curtain works once the build is this far along
@@ -93,13 +104,14 @@ const state = {
   linkAmt: 0,
   lastInput: -Infinity, // performance.now() of the last pointer input
   // the curtain: its centre (hero CSS px, on a spring) and how open it is (0..1)
-  cur: { x: -1e4, y: -1e4, vx: 0, vy: 0, amt: 0, rep: 0, rv: 0 },
+  cur: { x: -1e4, y: -1e4, vx: 0, vy: 0, amt: 0, rep: 0, rv: 0, tk: 0 }, // tk: 0 mouse … 1 touch (size and lift)
   pulse: 0, // convergence pulse 0..1
   energy: 0, // stirred-up energy of the field (0..1), decays over AFTERGLOW
   stir: [0, 0], // where it was last stirred, hero CSS px
   focusRect: null,
   focusAmt: 0,
   waves: [], // { x, y, t0 } in hero CSS px, seconds
+  touchMode: false, // the latest pointer was a finger (the curtain grows and lifts, the mouse's ring and gradient go)
   nuc: 0, // the pointer ring's presence 0..1 (its dots light in at random, see the shader)
   tog: { amt: 0, from: 0, to: 0, t0: 0, dur: 0, hot: 0, hover: false, focus: false }, // the theme switch's icon: how lit, how hovered
 };
@@ -135,9 +147,10 @@ const letters = Array.from({ length: LETTERS }, () => ({
   dur: 0,
   events: [], // this cycle's planned morphs: { at (ms into the cycle), to }
 }));
+let revealAll = false; // touch: all the marks are shown and stay
 const held = new Set(); // letters with keyboard focus (they show their mark); the choreography leaves them alone
 const hovered = new Set(); // no-WebGL only: letters under the pointer (whole-letter reveal)
-const pinned = (i) => held.has(i) || hovered.has(i);
+const pinned = (i) => held.has(i) || hovered.has(i) || revealAll;
 let cycleStart = null; // performance.now() when the running stand-alone cycle began; null while paused
 let pulseT0 = -Infinity;
 let ready = false; // the build is over: the choreography may run
@@ -180,7 +193,7 @@ function updateLetters(now) {
   const idle = now - state.lastInput > IDLE_MS;
   if (ready && !reduce) {
     if (!idle) pauseCycle(now);
-    else if (cycleStart === null) {
+    else if (cycleStart === null && !revealAll) {
       cycleStart = now;
       planCycle();
     }
@@ -424,7 +437,7 @@ const MARGIN = HALO + 10; // transparent border so outside distances fit and sam
 const DEPTH = 55; // texels: range of the inside distance
 const ROUND_OPEN = 17; // texels (≈ 4.9% of the letter height): radius of the outer corners
 const ROUND_CLOSE = 9; // texels (≈ 2.6%): radius of the inner corners
-const BRAND_H = 9.5; // viewBox units: every brand mark has this same height, centred on its letter (letters are 15.75)
+const BRAND_H = logoSvg.getBoundingClientRect().height < 60 ? 11.2 : 9.5; // viewBox units: every brand mark has this same height, centred on its letter (letters are 15.75); a little taller on small wordmarks, which have fewer dots to draw them with
 const BRAND_ROUND = [4, 3]; // texels: a light rounding for the brand marks (they have thin strokes)
 
 // Each brand mark's real extent (its path, rasterised once), so all of them share one height and centre line.
@@ -635,6 +648,8 @@ precision highp float;
 #define EDGE_SOFT 3.6      // letter edge: width of the density ramp, in cells (merges with the field)
 #define EDGE_HOVER 0.3     // … × this right around the pointer (crisper there)
 #define EDGE_NOISE 2.2     // roughness of that ramp, in cells
+#define EDGE_REF 90.0      // both are tuned for a wordmark this many cells tall; a smaller one (a phone) gets them in proportion…
+#define EDGE_MIN 0.45      // …down to this share (so its letters are not blurrier than a big screen's)
 #define TONE_DENS 0.3      // dot density of a mark's darkest tone layer (the envelope's sides), × full
 #define TONE_BRIGHT 0.5    // …and its brightness
 #define CURTAIN_FEATHER 0.35 // the curtain: a soft disc around the pointer, its edge feathered over this, × its radius…
@@ -896,8 +911,9 @@ void main() {
   vec2 pc = (cs - lc) / uCells.y;
   float nz = vnoise(vec3(pc * 4.5, uTime * 0.07)) * 0.65 + vnoise(vec3(pc * 11.0 + 3.0, uTime * 0.11)) * 0.35;
   float wave = vnoise(vec3(pc * 7.0 + vec2(uTime * 0.045, -uTime * 0.02), uTime * 0.3)) - 0.5;
-  float soft = EDGE_SOFT * mix(1.0, EDGE_HOVER, eNear);
-  float rough = (vnoise(vec3(c * 0.3, uTime * 0.25)) - 0.5) * EDGE_NOISE * mix(1.0, 0.4, eNear);
+  float resS = clamp(uLogo.w / EDGE_REF, EDGE_MIN, 1.0);
+  float soft = EDGE_SOFT * resS * mix(1.0, EDGE_HOVER, eNear);
+  float rough = (vnoise(vec3(c * 0.3, uTime * 0.25)) - 0.5) * EDGE_NOISE * resS * mix(1.0, 0.4, eNear);
 
   // ---- a letter's own change (letter ⇄ mark, amount s): the melt. The two shapes' signed distances are blended, so
   // one shape flows into the other as a single mass; the moment shifts a little across the letter along a smooth
@@ -1126,19 +1142,22 @@ function createScene() {
 
   // A dither cell is ~1/80 of the wordmark's height, between 1 and 1.5 CSS px and never under 2 device px.
   // The canvas itself runs at device pixels; the field pass runs at one fragment per cell.
-  const dpr = window.devicePixelRatio || 1;
+  const dpr = (query.has("debug") && Number(query.get("dpr"))) || window.devicePixelRatio || 1; // (?debug&dpr=3 imitates a 3× screen)
   let CELL = 3;
   let cells = [1, 1];
   let dev = [1, 1];
   let hr = hero.getBoundingClientRect();
+  let quality = 0; // device px added to the cell size by adaptive quality (0..ADAPT_MAX)
   let built = false; // set once everything below exists; until then nothing draws
   const waveData = new Float32Array(MAX_WAVES * 4);
 
   function resize() {
     hr = hero.getBoundingClientRect();
     measureLogo();
-    const cssCell = clamp(state.logoCss[3] / 80, 1, 1.5);
-    CELL = Math.max(2, Math.round(dpr * cssCell));
+    // a cell is ~1/80 of the wordmark's height, up to 1.5 CSS px, and never under 2 device px (so a 3× phone gets 0.67 CSS px
+    // cells and keeps its density, instead of being drawn as if it were 1×); `quality` makes them coarser if frames run slow
+    const cssCell = clamp(state.logoCss[3] / 80, 0, 1.5);
+    CELL = Math.max(2, Math.round(dpr * cssCell)) + quality;
     dev = [Math.max(1, Math.round(hr.width * dpr)), Math.max(1, Math.round(hr.height * dpr))];
     cells = [Math.ceil(dev[0] / CELL), Math.ceil(dev[1] / CELL)];
     canvas.width = dev[0];
@@ -1173,7 +1192,7 @@ function createScene() {
     const e = state.e;
     const [ex, ey] = toDev(e.x + hr.left, e.y + hr.top);
     gl.uniform2f(U.uDev, dev[0], dev[1]);
-    gl.uniform3f(U.uE, ex, ey, e.str);
+    gl.uniform3f(U.uE, ex, ey, e.str * (1 - state.cur.tk)); // (a finger needs no ring or gradient under it)
     // speed-dependent terms see at most MAX_SPEED, so a flick can never smear the field
     const sp = Math.hypot(e.vx, e.vy);
     const k = sp > MAX_SPEED ? MAX_SPEED / sp : 1;
@@ -1202,7 +1221,7 @@ function createScene() {
     const logo = [lx / CELL, ly / CELL, (w * dpr) / CELL, (h * dpr) / CELL];
     const cu = state.cur;
     const [cx, cy] = toDev(cu.x + hr.left, cu.y + hr.top);
-    const rev = [cx, cy, CURTAIN_R * h * dpr, cu.amt];
+    const rev = [cx, cy, CURTAIN_R * h * dpr * (1 + (TOUCH_CURTAIN - 1) * cu.tk), cu.amt];
 
     // pass 1: the field, one fragment per cell
     gl.bindFramebuffer(gl.FRAMEBUFFER, fbo);
@@ -1217,7 +1236,7 @@ function createScene() {
     gl.uniform1f(UF.uRep, cu.rep);
     const e = state.e;
     const [nx, ny] = toDev(e.tx + hr.left, e.ty + hr.top);
-    gl.uniform4f(UF.uN, nx, ny, reduce ? 0 : state.nuc, NUCLEUS_R * dpr * (1 + 0.25 * state.linkAmt));
+    gl.uniform4f(UF.uN, nx, ny, reduce ? 0 : state.nuc * (1 - cu.tk), NUCLEUS_R * dpr * (1 + 0.25 * state.linkAmt));
     gl.uniform1f(UF.uPulse, state.pulse);
     const [sx, sy] = toDev(state.stir[0] + hr.left, state.stir[1] + hr.top);
     gl.uniform3f(UF.uSea, reduce ? 0 : 1, sx, sy);
@@ -1277,7 +1296,15 @@ function createScene() {
     return out.toDataURL("image/png");
   }
 
-  return { draw, rectDev, cropCells, finish: () => gl.finish() };
+  // slow frames: one device px coarser (the wordmark keeps its shape, with fewer, bigger dots), at most ADAPT_MAX times
+  function coarser() {
+    if (quality >= ADAPT_MAX) return false;
+    quality++;
+    resize();
+    return true;
+  }
+
+  return { draw, rectDev, cropCells, coarser, quality: () => quality, finish: () => gl.finish() };
 }
 
 // One semi-implicit step of a damped spring: o[k] moves toward target, o[v] is its velocity. [ω, ζ]: ζ = 1 is
@@ -1311,10 +1338,97 @@ function setTarget(e) {
   state.lastInput = performance.now();
 }
 
+// the wave: two pulses from (x, y) in hero CSS px; the second leaves a moment after the first (its t0 is in the future
+// until then: the shader skips it)
+function spawnWave(x, y) {
+  if (!scene || reduce) return;
+  for (let k = 0; k < WAVE_PULSES; k++) state.waves.push({ x, y, t0: state.time + k * WAVE_PULSE_GAP, k: 1 - WAVE_PULSE_DECAY * k });
+  state.energy = Math.max(state.energy, 0.85);
+  state.stir = [x, y];
+  while (state.waves.length > MAX_WAVES) state.waves.shift();
+}
+
+// ------------------------------------------------------------------ touch
+// A finger has no hover, so on touch the gestures differ (the layout does not):
+//   tap on the wordmark         → every letter melts into its mark and stays (the cycle waits); a tap on a revealed mark
+//                                 (then the click) opens its link, so a link is never opened before it was seen
+//   tap anywhere else           → hides the marks if they are shown; otherwise sends the wave
+//   press and hold, or drag     → the curtain comes to the finger (bigger and a little above it, so the finger does not
+//                                 cover it) and follows it; letting go closes it. A hold or a drag never opens a link.
+// Marks left shown hide by themselves after REVEAL_HIDE_MS, and when the page is left. Mouse, pen and keyboard keep
+// what they had; with reduced motion or no WebGL a tap simply opens the link.
+let lastType = "mouse"; // the latest pointerdown's type
+let tapQuick = false; // the latest touch ended as a tap (short and still): only then may the click that follows act
+let touch = null; // the gesture in progress: { id, t0, x0, y0, x, y, moved, held, onLink }
+let revealT0 = 0;
+function revealMarks(now = performance.now()) {
+  if (revealAll) return;
+  revealAll = true;
+  revealT0 = now;
+  letters.forEach((_, i) => morphTo(i, 1, now));
+}
+function hideMarks(now = performance.now()) {
+  if (!revealAll) return;
+  revealAll = false;
+  letters.forEach((_, i) => !pinned(i) && morphTo(i, 0, now));
+}
+function touchHold() {
+  if (!touch || touch.held) return;
+  touch.held = true;
+  setTarget({ clientX: touch.x, clientY: touch.y }); // the curtain opens at the finger
+}
+function touchDown(e) {
+  const now = performance.now();
+  state.touchMode = true;
+  state.lastInput = now; // the choreography waits while a finger is down
+  if (revealAll) revealT0 = now;
+  tapQuick = false;
+  touch = { id: e.pointerId, t0: now, x0: e.clientX, y0: e.clientY, x: e.clientX, y: e.clientY, moved: false, held: false, onLink: !!e.target.closest?.("a, button") };
+}
+function touchEnd(e) {
+  const g = touch;
+  touch = null;
+  state.e.on = false;
+  if (!g) return;
+  const quick = e.type === "pointerup" && !g.held && !g.moved && performance.now() - g.t0 < HOLD_MS;
+  tapQuick = quick;
+  if (!quick || g.onLink) return; // (on a letter, the click that follows decides: reveal, or open)
+  if (revealAll) hideMarks();
+  else {
+    const r = hero.getBoundingClientRect();
+    spawnWave(g.x0 - r.left, g.y0 - r.top);
+  }
+}
+links.forEach((a) => {
+  a.addEventListener("click", (e) => {
+    if (lastType !== "touch" || e.detail === 0 || !scene || reduce) return; // mouse, keyboard, fallbacks: a plain link
+    if (!tapQuick) return e.preventDefault(); // a hold or a drag never opens a link
+    if (!revealAll) {
+      e.preventDefault(); // the first tap shows what is behind the letters; a tap on a mark opens it
+      revealMarks();
+    }
+  });
+});
+document.addEventListener("visibilitychange", () => document.hidden && hideMarks());
+
 window.addEventListener(
   "pointermove",
   (e) => {
-    if (e.pointerType === "touch" && e.buttons === 0) return;
+    if (e.pointerType === "touch") {
+      if (!touch) {
+        if (e.buttons !== 0 && (!scene || reduce)) setTarget(e);
+        return;
+      }
+      touch.x = e.clientX;
+      touch.y = e.clientY;
+      if (!touch.moved && Math.hypot(touch.x - touch.x0, touch.y - touch.y0) > TOUCH_SLOP) {
+        touch.moved = true;
+        touchHold();
+      }
+      if (touch.held) setTarget(e);
+      return;
+    }
+    state.touchMode = false;
     setTarget(e);
   },
   { passive: true }
@@ -1322,23 +1436,21 @@ window.addEventListener(
 window.addEventListener(
   "pointerdown",
   (e) => {
+    lastType = e.pointerType;
+    if (e.pointerType !== "touch") state.touchMode = false;
+    if (e.pointerType === "touch" && scene && !reduce) return touchDown(e);
     setTarget(e);
     if (!scene) return;
     // a click on a letter is its link (the browser follows it); anywhere else sends a wave across the screen
     if (reduce || e.target.closest?.("a, button")) return;
     const r = hero.getBoundingClientRect();
-    const x = e.clientX - r.left;
-    const y = e.clientY - r.top;
-    // two pulses: the second leaves a moment after the first (its t0 is in the future until then: the shader skips it)
-    for (let k = 0; k < WAVE_PULSES; k++) state.waves.push({ x, y, t0: state.time + k * WAVE_PULSE_GAP, k: 1 - WAVE_PULSE_DECAY * k });
-    state.energy = Math.max(state.energy, 0.85);
-    state.stir = [x, y];
-    while (state.waves.length > MAX_WAVES) state.waves.shift();
+    spawnWave(e.clientX - r.left, e.clientY - r.top);
   },
   { passive: true }
 );
 const pointerOff = (e) => {
-  if (e.type === "pointerleave" || e.pointerType === "touch") state.e.on = false;
+  if (e.type === "pointerleave") state.e.on = false;
+  else if (e.pointerType === "touch") scene && !reduce ? touchEnd(e) : (state.e.on = false);
 };
 window.addEventListener("pointerup", pointerOff, { passive: true });
 window.addEventListener("pointercancel", pointerOff, { passive: true });
@@ -1357,12 +1469,23 @@ new IntersectionObserver(([en]) => (visible = en.isIntersecting)).observe(hero);
 
 let last = 0;
 const t0 = performance.now();
+// every display frame (60/90/120/144 Hz), touch included; if frames stay slow, the dots get coarser (see ADAPT_MS)
+let slowEma = 16.7;
+let slowFrames = 0;
+function adapt(dtMs) {
+  if (!scene || dtMs > 250) return; // (a stall: a tab switch, a shader compile; not a rate)
+  slowEma += (dtMs - slowEma) * 0.04;
+  if (++slowFrames > 90 && slowEma > ADAPT_MS && scene.coarser()) {
+    slowEma = 16.7;
+    slowFrames = 0;
+  }
+}
 function frame(now) {
   requestAnimationFrame(frame);
   if (!visible || document.hidden) return;
   const dtMs = now - last;
-  if (coarse && dtMs < 30) return; // ~30 fps on touch devices; every display frame elsewhere (60/90/120/144 Hz)
   last = now;
+  adapt(dtMs);
   update(now, Math.min(dtMs, 50) / 1000);
   scene?.draw();
 }
@@ -1385,16 +1508,27 @@ function update(now, dt) {
   e.str = clamp01(e.str);
   state.linkAmt += (1 - Math.exp(-dt * 14)) * ((state.link && e.on ? 1 : 0) - state.linkAmt);
 
+  // touch: a finger down keeps the choreography paused and the revealed marks up; a long press becomes a hold; marks left
+  // alone for a while hide
+  if (touch) {
+    state.lastInput = now;
+    if (revealAll) revealT0 = now;
+    if (!touch.held && now - touch.t0 > HOLD_MS) touchHold();
+  }
+  if (revealAll && now - revealT0 > REVEAL_HIDE_MS) hideMarks(now);
+
   // the curtain: open while the pointer is active (after the build is half done), closing softly after it
   const cu = state.cur;
+  cu.tk += (1 - Math.exp(-dt * 10)) * ((state.touchMode ? 1 : 0) - cu.tk); // 0 mouse … 1 touch: bigger, and above the finger
+  const cuY = e.ty - TOUCH_LIFT * cu.tk;
   const active = e.on && now - state.lastInput <= IDLE_MS && state.intro >= CURTAIN_FROM;
   if (cu.amt < 0.01 && active) {
     cu.x = e.tx;
-    cu.y = e.ty;
+    cu.y = cuY;
     cu.vx = cu.vy = 0;
   }
   spring(cu, "x", "vx", e.tx, CURTAIN_SPRING, dt);
-  spring(cu, "y", "vy", e.ty, CURTAIN_SPRING, dt);
+  spring(cu, "y", "vy", cuY, CURTAIN_SPRING, dt);
   cu.amt += (1 - Math.exp(-dt * (active ? CURTAIN_OPEN : CURTAIN_CLOSE))) * ((active ? 1 : 0) - cu.amt);
   // the repel is viscous: an underdamped spring, slow to open, slower to close, a touch of overshoot at most
   spring(cu, "rep", "rv", active ? 1 : 0, active ? REPEL_OPEN : REPEL_CLOSE, dt);
@@ -1532,6 +1666,10 @@ if (new URLSearchParams(location.search).has("debug")) {
       ready = true;
       tweenTo(state.tog, 1, ICON_IN_MS, performance.now());
     },
+    // touch: the gesture state, and a way to drive the same paths with synthetic events
+    touchState: () => ({ revealAll, tapQuick, lastType, touch: touch && { held: touch.held, moved: touch.moved }, tk: +state.cur.tk.toFixed(2) }),
+    adapt,
+    quality: () => scene?.quality(),
     setTheme,
     theme,
     themeCurve,
