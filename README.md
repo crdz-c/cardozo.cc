@@ -2,18 +2,18 @@
 
 Source of [cardozo.cc](https://cardozo.cc) — Lucas Cardozo, product designer.
 
-One screen for now. The hero is **one canvas of dots**: the CRDZC wordmark and the links stacked under it are
-rendered *into* a single dithered dot field, made of the same square dots. The pointer is a small "electron" that
-pushes the field around; a letter flips when the pointer enters it; a click on the background sends a wave across
-the screen. No build step, no dependencies (native ES modules). This repo is where the full site will live later.
+One screen: the **CRDZC** wordmark, centred, drawn as dots in a single dithered dot field. **Each letter is a link.**
+Every few seconds a letter flips on its own and its dots regather into the mark of its link (envelope, LinkedIn,
+Dribbble, Medium, GitHub), then flip back. The pointer is a small "electron" that pushes the dots around; a click
+on the background sends a slow ripple across the screen. No build step, no dependencies (native ES modules).
 
 ```
-index.html   the page: real DOM for layout, links, focus and screen readers; the wordmark is inline SVG
-style.css    layout; under .gl the links stay in layout but are visually transparent (the shader draws them)
-hero.js      wordmark texture, shaders, electron, flips, waves, calm sea and afterglow, boot
-elements.js  the scene-element registry and the UI-mask rasteriser (text, boxes, SVG, images)
+index.html   the page: the wordmark as inline SVG, each letter an <a> (the real links, focus, screen readers)
+style.css    layout; under .gl the SVG stays in place but transparent (the shader draws it)
+hero.js      letter/brand textures, the dot-field shader, flips and faces, electron, waves, sea, boot
+brands.js    the five brand marks as SVG path data
 raster.js    exact distance transform, corner rounding, blue-noise threshold map
-fonts/       Big Shoulders Display (links, boot counter) + Geist Mono (boot console), self-hosted, OFL
+fonts/       Big Shoulders Display (boot counter) + Geist Mono (boot console), self-hosted, OFL
 CNAME        custom domain for GitHub Pages
 ```
 
@@ -26,124 +26,93 @@ python3 -m http.server 8000
 ```
 
 Open <http://localhost:8000>. The boot sequence plays once per browser session; add `?boot` to replay it.
-`?debug` exposes `window.__hero` (live state, flips, and `crop(x, y, w, h, zoom)`, which returns the field as
-rendered, one pixel per cell) for scripted checks.
+`?debug` exposes `window.__hero`: live `state`, `flips`, `letters()` (each letter's face, mirror, whether it is
+flipping and ms to its next flip) and `crop(x, y, w, h, zoom)` (the field as rendered, one pixel per cell).
 
-## Layout
+## Letters are links
 
-The wordmark is 39 vw wide (60 vw under 700 px), fixed in the exact centre. The six links hang under it, centred,
-one per line (`.dock`: `top: 50% + half the wordmark's height + clamp(22px, 4.5vh, 48px)`). No header, no
-container, no dividers, no arrows; screen readers get "opens in a new tab". Checked at 1788×986, 1545×986,
-1440×700, 768×1024 and 375×812: no overlap, no scroll.
+| letter | link | brand face |
+|---|---|---|
+| C | mailto:lucas@cardozo.cc | envelope |
+| R | linkedin.com/in/cardozolucas | LinkedIn |
+| D | dribbble.com/cardozoconc | Dribbble |
+| Z | medium.com/@cardozoconc | Medium |
+| C | github.com/crdz-c | GitHub |
 
-## Architecture: one canvas of dots
+The links live in `index.html`: each letter's `<g class="lt">` sits inside an SVG `<a>` with a transparent hit box
+over its column, so the whole column is clickable whatever face is showing. Web links open in a new tab
+(`rel="me noopener"`); each has an `aria-label`. The brand face is read from the link's URL, so **remapping is just
+reordering the `href`s** in `index.html`. Under `.gl` the SVG is `opacity: 0`, not hidden: hit-testing, the pointer
+cursor, keyboard focus (Tab, Enter) and screen readers keep working. Keyboard focus is drawn as a dotted underline
+in the dots. Hover has no special effect: the electron does what it does everywhere.
 
-- **Two passes.** *Field* runs at one fragment per dither cell (≈ 1/80 of the wordmark's height, 1–1.5 CSS px,
-  never under 2 device px) into a texture: the dot field, the wordmark, the electron, the waves and the UI.
-  *Compose* upscales it to device pixels, each cell an exact CELL × CELL square.
-- **One material.** Field dots sit on one checkerboard lattice (they touch at most at a corner) and are
-  thresholded by one 64×64 blue-noise map. A letter is only a region where those dots are denser and paper-white;
-  field dots are dimmer and a touch cooler. Letter edges are a wide density ramp roughened by noise — no fill,
-  no outline, no halo — crisper right around the electron.
-- **Field.** Density, not dot size, carries the gradient: a quadtree of 8 / 4 / 1-cell blocks subdivides where a
-  noise-warped field (dense around the wordmark) beats a jittered threshold, so the edges of the screen are a quiet
-  dot grid and the centre is fine grain. Forced fine around the wordmark, the electron and wave fronts.
-- **Wordmark.** The SVG paths are rasterised once, corners rounded (opening by a 17-texel disc ≈ 4.9% of the letter
-  height, closing by 9 ≈ 2.6%, on an exact Euclidean distance transform), and stored as coverage + inside distance
-  + outside distance. A CPU copy of the signed distance drives the pointer's enter test.
-- **Calm sea and afterglow.** The field is never quite still: a slow, low-frequency swell displaces its density
-  (0.9 cells), carrying ~14-cell ripples of dots, on top of per-dot twinkle and a slow brightness wave. A moving
-  electron or a wave stirs up an *energy* (0..1) that enlarges and quickens the swell — most around where it
-  happened — and decays with a 2.8 s time constant. The letters drift only slightly while it lasts; the UI never.
+## Flips and faces
 
-## Type
+- Every letter has two faces sharing one texture layout: the letter (the wordmark's own paths, corners rounded) and
+  its brand mark (fitted in a 14 × 14 unit square centred on the letter, lightly rounded). Both are stored as
+  coverage + inside distance + outside distance, so a brand mark is made of the same dots, with the same soft edge.
+- Each letter flips **on its own timer**: the first flip after `FLIP_FIRST` (1.5–5 s, so they never flip together),
+  then every `FLIP_EVERY` (4–6 s). A flip takes `FLIP_DUR` (760–980 ms, quart in-out), horizontally or vertically at
+  random, around the letter's centre (scale through zero).
+- At edge-on the face swaps. Around the swap the shape thins out (`MORPH_THIN` 0.7) and a cloud of dots in flight
+  fills the letter's box (`MORPH_CLOUD` 0.55, re-rolled a dozen times a second): the dots scatter and regather into the
+  other shape; same dots, no cross-fade.
+- Brand marks are always upright. The letter face keeps a mirror state: random on every load, and each time the letter
+  comes back the flipped axis toggles it, so the wordmark's orientations keep evolving. `HORIZONTAL_BIAS` sets the odds
+  per letter (C and D look the same flipped vertically).
+- A flip that comes due while its letter is hovered or focused waits (`POSTPONE` 700 ms, re-checked), so a click never
+  lands on a moving target.
 
-The links are set in **Big Shoulders Display 700, uppercase**, 15 px (14 px on phones), tracked 0.08 em, and drawn
-by sampling the font's own coverage once per field cell (two taps across the cell for a little extra weight; a
-cell lights above 42% coverage). So the words are made of the field's square cells: crisp, steady, no blur.
+## The field
 
-Why this face: it is the boldest condensed geometric grotesque we ship (OFL, self-hosted). Its round bowls and
-straight, square-cut strokes sit closest to the wordmark (heavy geometric grotesque, round C and D, straight Z
-and R leg). Uppercase matches the wordmark. The vendored file stops at weight 700, so the Black (800–900) cut is
-not available. Anton, Bebas Neue, Barlow Condensed, Archivo ExtraCondensed, Saira ExtraCondensed, League Gothic
-and Oswald were not compared: they are not on this machine, and adding one means downloading its OFL file.
-Swapping the face is one `@font-face` and one `font-family` in `style.css`; the pipeline draws whatever font the DOM uses.
+- **Two passes.** *Field* runs at one fragment per dither cell (≈ 1/80 of the wordmark's height, 1–1.5 CSS px, never
+  under 2 device px) into a texture; *compose* upscales it, each cell an exact square.
+- **One material.** Dots sit on one checkerboard lattice and are thresholded by one 64×64 blue-noise map. A letter
+  (or brand mark) is only where those dots gather and burn paper-white; field dots are dimmer and cooler. Edges are a
+  wide density ramp roughened by noise, crisper right around the electron. No fill, outline or halo.
+- **Density, not dot size,** carries the gradient: a quadtree of 8 / 4 / 1-cell blocks, fine around the wordmark,
+  the electron and wave fronts, a quiet grid toward the edges.
+- **Calm sea and afterglow.** A slow swell displaces the field's density (0.9 cells), carrying ~14-cell ripples, on top
+  of per-dot twinkle and a slow brightness wave. A moving electron or a wave stirs up an energy (0..1) that enlarges
+  the swell around where it happened and decays over `AFTERGLOW` (2.8 s). The letters drift only slightly meanwhile.
+- **The electron.** The pointer (or a finger while touching) on a critically damped spring (ω 26), radius 32 CSS px:
+  a bright core, the field pushed out (thinner inside, bunched at the rim), a sideways deflection with speed and a
+  short wake. Caps for fast motion: no segment is ever drawn between samples; springs are sub-stepped at ≤ 8 ms with
+  `dt` ≤ 50 ms; deflection, wake and energy respond to at most `MAX_SPEED` (2400 px/s).
+- **Waves.** A click or tap on the background (a click on a letter opens its link instead) sends a ripple through
+  everything: speed 0.55 screen heights/s (it passes the farthest corner), life 4.6 s with a slow decay
+  ((1 − age/life)^1.4, 0.25 s fade-in), ring half-width 0.06 screen heights, push 0.016 screen heights, density swell
+  0.8, two trailing echoes (0.45 and 0.2, 2.6 half-widths apart, alternating push like water). Up to 6 overlap.
+- **Boot** (~3.5 s, first visit per session): console, counter, progress line; the field fills in and the letters
+  dissolve in. Returning visitors get only the entrance.
+- **Size.** The wordmark is 39 vw wide (60 vw under 700 px), fixed in the exact centre.
 
-`TEXT_LATTICE` chooses between every cell (default, 0: crisp words at small sizes) and the field's checkerboard (1:
-lighter, more "dotted"). Hover always uses every cell and full brightness.
+## Fallbacks
 
-## The element pipeline
+- **No JS:** the SVG wordmark, each letter a working link.
+- **No WebGL:** the same SVG links; the letters keep their random mirror states and flip on the same timers, swapping
+  to the brand mark (drawn as an SVG path) and back.
+- **`prefers-reduced-motion`:** one still frame in dots (redrawn for keyboard focus): no boot, no flips, no
+  electron motion, no sea, no waves.
 
-`elements.js` keeps a registry of everything rendered into the dots. **Layout stays in the DOM**: each element
-points at a real node; on resize and font load the registry is rasterised into one screen-sized *UI mask*
-(device pixels) that the field pass samples once per cell:
+## Brand marks
 
-| channel | meaning |
-|---|---|
-| R | text: the node's own web font, glyph coverage × density |
-| G | 0.25 = an element's area (the field quiets under it); above that a shape drawn as lattice dots at density (G − 0.25)/0.75 |
-| B | image tone → dot density |
-
-The electron and the waves move everything in the mask: text in whole even-cell steps (it never breaks up), softened
-inside the hovered word so it stays readable. Under `.gl` the DOM versions are transparent but keep working (click,
-keyboard, screen readers); keyboard focus is drawn as a dotted underline. Without WebGL the normal DOM shows.
-
-### Adding an element
-
-Register it in `hero.js` next to the links; the node must exist in the DOM (it can be visually transparent under `.gl`).
-
-```js
-// text: any element with text; font, size, letter-spacing and wrapping come from its computed style
-elements.add({ id: "role", kind: "text", node: document.querySelector(".role"), density: 0.8 });
-
-// a box: an area (quiets the field under it) and/or a dotted outline; hover: true makes it light up under the pointer
-elements.add({ id: "card", kind: "box", node: card, area: true, outline: true, density: 0.6, hover: true });
-
-// an SVG: its <path>s are filled, scaled from the viewBox to the node's box
-elements.add({ id: "icon", kind: "svg", node: document.querySelector("svg.icon") });
-
-// an image: its luminance becomes dot density inside the node's box (same-origin only, no external requests)
-elements.add({ id: "photo", kind: "image", node: document.querySelector(".photo"), src: "img/photo.jpg", density: 0.9 });
-```
-
-`kind: "wordmark"` is special (its own texture and flips).
-
-## Interaction
-
-- **The electron.** The pointer (or a finger while touching) is a small, precise focus on a critically damped
-  spring (ω 26): radius 32 CSS px, a knot of bright dots at its core, the field pushed outward (thinned inside,
-  bunched in a ring at the rim), a sideways deflection relative to its motion (like a charge bending field lines)
-  and a short wake. No idle light: with no pointer the page only breathes.
-- **Caps for fast motion.** The electron is a single point on a spring (no segment is ever drawn between pointer
-  samples); springs are sub-stepped at ≤ 8 ms and `dt` is capped at 50 ms; the deflection, the wake and the stirred
-  energy respond to at most `MAX_SPEED` (2400 CSS px/s); energy is capped at 1 and decays over `AFTERGLOW`; waves
-  live `WAVE_LIFE`. A fast flick returns to the calm baseline within ~3 s with nothing left behind.
-- **Flips.** Every letter starts in a **random orientation** on each load. A letter flips when the pointer
-  **enters** its shape (or a finger taps it), horizontally or vertically at random, around its own centre:
-  760–980 ms, quart in-out, dimming and loosening while edge-on. It can flip again only after the pointer has left
-  it (`ENTER_IN` 0.02 h inside the edge to trigger, `ENTER_OUT` 0.08 h outside to re-arm) and a `FLIP_COOLDOWN`
-  of 250 ms after the flip ends. `HORIZONTAL_BIAS` sets the odds per letter (C and D look the same flipped vertically).
-- **Links.** Hovering a word draws it with every cell at full brightness; the real `<a>` handles the click and the
-  cursor; keyboard focus draws a dotted underline.
-- **Waves.** A click or tap on the background (not a link, not a letter) sends a ring through the whole field —
-  letters and links included — at 0.95 screen heights/s for 1.9 s; up to four overlap.
-- **Boot** (~3.5 s, first visit per session): console, counter, progress line; the field fills in, the letters
-  dissolve in, then the links dissolve in. Returning visitors get only the entrance.
-- **Degrades**: no JS → static page with the SVG wordmark and the links. No WebGL → SVG + DOM links, same random
-  orientations, letters flip when the pointer enters their column. `prefers-reduced-motion` → one still frame
-  (still in dots), redrawn for hover and focus; no boot, flips, electron motion, sea or waves.
+GitHub, Medium and Dribbble come from Simple Icons 16.36.0; LinkedIn from Simple Icons 13.21.0 (the last release that
+ships it). Simple Icons is CC0-1.0 (<https://simpleicons.org>). The envelope was drawn for this site. The marks are
+trademarks of their owners and are used only to link to Lucas's own profiles. To add or change one, edit `brands.js`
+(24 × 24 path data) and `brandOf()` in `hero.js`.
 
 ## Knobs
 
-Shader (top of `FIELD` / `PUSH` in `hero.js`): `DENS_L` 0.72 letter density · `DENS_WAVE` 0.25 · `DENS_E` 0.3 ·
-`EDGE_SOFT` 3.6 cells · `EDGE_HOVER` 0.3 · `EDGE_NOISE` 2.2 · `TONE_L` 0.97 · `TWINKLE` 0.3 · `FIELD_TINT` ·
+Shader (`FIELD` / `PUSH` in `hero.js`): `DENS_L` 0.72 · `DENS_WAVE` 0.25 · `DENS_E` 0.3 · `EDGE_SOFT` 3.6 cells ·
+`EDGE_HOVER` 0.3 · `EDGE_NOISE` 2.2 · `TONE_L` 0.97 · `TWINKLE` 0.3 · `FIELD_TINT` · `MORPH_THIN` 0.7 · `MORPH_CLOUD` 0.55 ·
 `SEA_AMP` 0.9 · `SEA_STIR` 4.0 · `SEA_GLOBAL` 1.2 · `SEA_SCALE` 0.3 · `SEA_SPEED` 0.05 · `SEA_RIPPLE` 0.07 · `CORE` 0.32 ·
-`PUSH_AMT` 0.6 · `THIN` 0.6 · `DEFLECT` 0.35 · `RING` 0.75 · `WAKE` 0.5 · `WAVE_SPEED` 0.95 · `WAVE_WIDTH` 0.03 ·
-`WAVE_PUSH` 0.007 · `WAVE_DENS` 0.55 · `TEXT_CUT` 0.42 · `TEXT_LATTICE` 0 · `TEXT_TONE` 0.86 · `LINE_TONE` 0.5 ·
-`AREA_QUIET` 0.25 · `IMG_DENS` 0.9.
+`PUSH_AMT` 0.6 · `THIN` 0.6 · `DEFLECT` 0.35 · `RING` 0.75 · `WAKE` 0.5 · `WAVE_SPEED` 0.55 · `WAVE_WIDTH` 0.06 ·
+`WAVE_PUSH` 0.016 · `WAVE_DENS` 0.8 · `WAVE_ECHO` 0.45 · `WAVE_ECHO2` 0.2 · `WAVE_GAP` 2.6.
 JS (top of `hero.js`): `ELECTRON_R` 32 px · `ELECTRON_SPRING` [26, 1] · `AFTERGLOW` 2.8 s · `MAX_SPEED` 2400 px/s ·
-`ENTER_IN` 0.02 · `ENTER_OUT` 0.08 · `FLIP_COOLDOWN` 250 ms · `WAVE_LIFE` 1.9 s · `HORIZONTAL_BIAS` per letter.
-Ink #060606, paper #f0efea.
+`FLIP_EVERY` 4–6 s · `FLIP_FIRST` 1.5–5 s · `FLIP_DUR` 760–980 ms · `POSTPONE` 700 ms · `WAVE_LIFE` 4.6 s ·
+`MAX_WAVES` 6 · `BRAND_SIZE` 14 units · `BRAND_ROUND` [4, 3] texels · `ROUND_OPEN` / `ROUND_CLOSE` 17 / 9 texels ·
+`HORIZONTAL_BIAS` per letter. Ink #060606, paper #f0efea.
 
 Visual direction is inspired by christendijoux.com; the shader, motion and code here are original.
 

@@ -120,46 +120,6 @@ a {
   opacity: 1;
 }
 
-/* ---------------------------------------------------------------- links
-   Stacked under the wordmark, centred, one per line: no container, no dividers, no arrows. One type for the
-   interface: Big Shoulders Display, bold, condensed, uppercase — the closest to the wordmark we ship. */
-
-.dock {
-  --logo-w: clamp(190px, 39vw, 690px);
-  --gap: clamp(22px, 4.5vh, 48px);
-  position: absolute;
-  left: 50%;
-  top: calc(50% + var(--logo-w) * 0.0875 + var(--gap));
-  z-index: 2;
-  transform: translateX(-50%);
-}
-
-.links {
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  font-family: var(--font-display);
-  font-size: 15px;
-  font-weight: 700;
-  line-height: 1;
-  letter-spacing: 0.08em;
-  text-transform: uppercase;
-}
-
-.links a {
-  display: block;
-  padding: 5px 10px;
-  color: var(--paper);
-  white-space: nowrap;
-  transition: background 0.35s var(--ease), color 0.35s var(--ease);
-}
-
-.links a:hover,
-.links a:focus-visible {
-  background: var(--paper);
-  color: var(--ink);
-}
-
 /* ---------------------------------------------------------------- the logo
    Centred. The SVG is the real, accessible wordmark and the no-WebGL fallback; once WebGL is running
    the canvas draws it instead. */
@@ -184,10 +144,11 @@ a {
 }
 
 .gl .logo svg {
-  visibility: hidden; /* keeps its box: JS measures it to place the WebGL wordmark */
+  opacity: 0; /* the shader draws it; the SVG stays for layout, hit-testing, focus and screen readers */
 }
 
-.logo .lt {
+.logo .lt,
+.logo .bf {
   transform-box: fill-box;
   transform-origin: center;
 }
@@ -304,42 +265,36 @@ a {
    .booting  → everything waits just off-stage.  .ready → it all settles in. */
 
 .js.booting .logo path { transform: translateY(112%); }
-.js.booting .rise { opacity: 0; transform: translateY(8px); }
 
-.rise {
-  transition: opacity 0.9s ease 0.5s, transform 0.9s var(--ease) 0.5s;
-}
 
 /* ---------------------------------------------------------------- small screens */
 
 @media (max-width: 699.98px) {
   .logo { width: 60vw; }
-  .dock { --logo-w: 60vw; }
-  .links { font-size: 14px; }
 }
 
-/* ---------------------------------------------------------------- rendered into the dots
-   With WebGL the links are drawn by the shader (see elements.js). The DOM
-   versions stay in layout and keep working (click, keyboard, screen readers) but are visually transparent;
-   the focus ring is drawn in dots too. */
+/* ---------------------------------------------------------------- letters are links
+   Each letter is an SVG <a> (with a transparent hit box over its column). With WebGL the shader draws the
+   letters, so the SVG is invisible but still there: opacity, not visibility, keeps hit-testing, the cursor,
+   keyboard focus and screen readers working. Focus is drawn in dots by the shader. */
 
-.gl .links,
-.gl .links a,
-.gl .links a:hover,
-.gl .links a:focus-visible {
-  color: transparent;
-  background: transparent;
-  border-color: transparent;
-}
-
-.gl .links a:focus-visible {
-  outline-color: transparent;
-}
-
-.gl .links a {
+.logo .ln {
   cursor: pointer;
 }
 
+.logo .ln:focus-visible {
+  outline: 1px solid var(--paper);
+  outline-offset: 2px;
+}
+
+.gl .logo .ln:focus-visible {
+  outline: none;
+}
+
+.logo .brand {
+  display: none;
+}
+
 @media (prefers-reduced-motion: reduce) {
-  .logo path, .rise, .scene, .boot, .links a { transition: none; }
+  .logo path, .scene, .boot { transition: none; }
 }
