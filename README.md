@@ -188,8 +188,11 @@ span many tones of grey against the black, and the marks keep their own tones (t
 **The change is the loading's fill, only faster, in the very pixels the dots are made of.** There is no gradient and no
 blocks: the progress runs the same rate curve as the build (`BUILD_RATE`, compressed into `THEME_MS` 1300 with a soft
 landing: time is warped by 1 − (1 − t)^1.8), and every cell of the field, the background included (one cell = one dot,
-1–1.5 CSS px), flips palette when that progress passes its own blue-noise rank. So the pixels change state at random,
-evenly spread, most of them early and a few late, each one fading over a short window (`THEME_SOFT` 0.05 of the
+1–1.5 CSS px), flips palette when that progress passes its own random rank. The rank is white noise, a hash per cell
+(`hash12` in the shader): no tile, no repeat. (It used the 64×64 blue-noise map first, which repeats every 64 cells and
+whose neighbours are anti-correlated, so half-way through the screen showed a visible pattern: cells 64 apart matched
+99 % of the time. Now neighbours and cells 64 apart match 50 %, as random does.) So the pixels change state at random,
+most of them early and a few late, each one fading over a short window (`THEME_SOFT` 0.05 of the
 progress, roughly 100–150 ms), and at any moment the screen is a fine dither of the two themes. The density and tone
 rules above follow each cell, so letters turn from dots to ink (or back) pixel by pixel as the progress reaches them.
 CSS vars `--bg` / `--fg`, `theme-color` and `color-scheme` follow when it ends. Under reduced motion it switches at once.

@@ -311,7 +311,7 @@ const themeBtn = hero.querySelector(".theme");
 // ------------------------------------------------------------------ theme
 // Dark (true black) and light (true white). The first paint already has the right one (index.html). Switching is the
 // loading's fill, only faster: the progress below runs the same rate curve as the build (compressed into THEME_MS,
-// with a soft landing), and in the shader every cell, the background included, flips palette at its own blue-noise
+// with a soft landing), and in the shader every cell, the background included, flips palette at its own random
 // moment, so the pixels themselves change state, at random, quick first and a few late.
 const themeCurve = (t) => buildProgress(1 - Math.pow(1 - t, 1.8));
 const theme = {
@@ -710,6 +710,13 @@ uniform float uTogHot;    // …hovered / focused 0..1
 uniform float uTheme;     // 0 dark … 1 light (eased in JS; each cell crosses at its own moment)
 
 float hash3(vec3 p) { return fract(sin(dot(p, vec3(127.1, 311.7, 74.7))) * 43758.5453123); }
+// white noise without a tile: every cell its own random number (no sine, so no diagonal artefacts at large coordinates).
+// The blue-noise map repeats every 64 cells (and its neighbours are anti-correlated), which the eye reads as a pattern.
+float hash12(vec2 p) {
+  vec3 p3 = fract(vec3(p.xyx) * 0.1031);
+  p3 += dot(p3, p3.yzx + 33.33);
+  return fract((p3.x + p3.y) * p3.z);
+}
 float vnoise(vec3 x) {
   vec3 i = floor(x);
   vec3 f = fract(x);
@@ -818,10 +825,10 @@ void main() {
   float th = blue(cell);
   float th2 = blue(cell + vec2(29.0, 13.0));
   // ---- theme: which palette this cell is in. The loading's fill again, only faster: the progress (uTheme, from JS) runs
-  // past every cell's own blue-noise rank at some moment, background cells included, so the very pixels the dots are
-  // made of change state at random, most early and a few late, each over a short fluid window. In the light theme
+  // past every cell's own random rank at some moment (white noise: no tile, no repeat), background cells included, so
+  // the very pixels the dots are made of change state at random, most early and a few late, each over a short fluid window. In the light theme
   // letters are ink and the field is greys (see the knobs), so the density and tone rules below follow 'flip' too.
-  float thT = blue(cell + vec2(53.0, 7.0));
+  float thT = hash12(cell + vec2(17.0, 43.0));
   float flip = smoothstep(thT - THEME_SOFT, thT + THEME_SOFT, uTheme * (1.0 + 2.0 * THEME_SOFT) - THEME_SOFT);
   float h = fract(sin(dot(cell, vec2(12.9898, 78.233))) * 43758.5453);
   // every dot has its own slow phase: it breathes in and out rather than popping
