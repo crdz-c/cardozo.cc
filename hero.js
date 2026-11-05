@@ -93,9 +93,11 @@ const ADAPT_MAX = 2;
 const ZOOM_CELL_PX = 28; // at the limit one dot-cell is this many CSS px on the screen
 const ZOOM_OMEGA = 15; // the shown zoom follows its target on a critically damped spring of this ω (1/s): no jerk at the start of a gesture…
 const ZOOM_OMEGA_DIRECT = 48; // …and a stiffer one while fingers hold it (nearly 1:1)
+const RESET_BASE = 0.6; // s: the way back to 100 % is one glide, this long plus…
+const RESET_PER_LOG = 0.2; // …this per unit of log-zoom (a 28× zoom takes ~1.3 s, 1.5× takes ~0.7 s)
 const PAN_FRICTION = 4.5; // 1/s: a released drag keeps gliding, its speed dying away at this rate…
 const PAN_GLIDE_MIN = 70; // …when it was faster than this (CSS px/s); it stops under 8 px/s
-const ZOOM_WHEEL = 0.0018; // log-zoom per wheel pixel…
+const ZOOM_WHEEL = 0.0018; // log-zoom per wheel pixel: scrolling "down" (deltaY > 0: on a Mac with natural scrolling, a swipe up) zooms in, the natural direction; make it negative to flip…
 const ZOOM_WHEEL_PINCH = 0.012; // …and per pixel of a trackpad pinch (a wheel with ctrlKey)
 const ZOOM_SOFT = 0.12; // rubber band past the zoom limit, in log units, while the wheel/fingers push; it settles back after…
 const ZOOM_IDLE_MS = 170; // …this long without input
@@ -130,7 +132,7 @@ const state = {
   zb: { amt: 0, from: 0, to: 0, t0: 0, dur: 0, hot: 0, hover: false, focus: false, want: false }, // the zoom reset's icon, the same
   // the view (zoom): screen = scene × z + (tx, ty), in hero CSS px. `raw` is where the input wants the log-zoom, `lz` the shown
   // one (it follows `raw`, eased, with a rubber band at the limit); (ax, ay) is a screen point held over the scene point (sx, sy)
-  view: { z: 1, lz: 0, raw: 0, tx: 0, ty: 0, ax: 0, ay: 0, sx: 0, sy: 0, last: -Infinity, hold: false, applied: 1, sign: 1, lv: 0, fx: 0, fy: 0, mt: 0, mx: 0, my: 0 },
+  view: { z: 1, lz: 0, raw: 0, tx: 0, ty: 0, ax: 0, ay: 0, sx: 0, sy: 0, last: -Infinity, hold: false, applied: 1, sign: 1, anim: null, lv: 0, fx: 0, fy: 0, mt: 0, mx: 0, my: 0 },
   focusUI: null, // the on-screen button (theme or zoom reset) with keyboard focus: the compose pass underlines it
   focusUIAmt: 0,
 };
@@ -233,9 +235,20 @@ function updateLetters(now) {
   }
   const u = (now - pulseT0) / PULSE_MS;
   state.pulse = u > 0 && u < 1 ? Math.sin(Math.PI * u) ** 2 : 0;
+  // Which shape of each link answers to a pointer: the letter while it shows a letter, the mark while it shows its mark, and
+  // both while the curtain is open over it (the mark is then revealed round the pointer). Never the empty column round them.
+  const cu = state.cur;
+  const hb = hero.getBoundingClientRect();
+  const [lgx, lgy, lgw, lgh] = state.logoCss;
+  const curR = CURTAIN_R * lgh * (1 + (TOUCH_CURTAIN - 1) * cu.tk) * 0.9;
   letters.forEach((L, i) => {
     L.amt = amtAt(L, now);
     letterUniform.set([L.amt, L.mx, L.my, 0], i * 4);
+    const covered = cu.amt > 0.4 && Math.hypot(lgx - hb.left + lgw * LETTER_CENTERS[i] - cu.x, lgy - hb.top + lgh / 2 - cu.y) < curR;
+    const wantLt = L.amt < 0.5;
+    const wantMk = L.amt >= 0.5 || covered;
+    if (L.hitLt !== wantLt) links[i].classList.toggle("hit-lt", (L.hitLt = wantLt));
+    if (L.hitMk !== wantMk) links[i].classList.toggle("hit-mk", (L.hitMk = wantMk));
   });
   if (!scene) dissolveSvg();
 }
@@ -258,6 +271,16 @@ function makeBrandGroups() {
     place.setAttribute("transform", `translate(${x} ${y}) scale(${s})`);
     place.appendChild(p);
     g.appendChild(place);
+    // the mark's own box (centred on its letter): where a tap on the mark counts. It is the mark, not its column: the links
+    // answer to the letter or the icon itself, nothing round them
+    const box = document.createElementNS("http://www.w3.org/2000/svg", "rect");
+    box.setAttribute("class", "mk-hit");
+    box.setAttribute("x", LETTER_CENTERS[i] * VBW - brandFit[i].w / 2);
+    box.setAttribute("y", VBH / 2 - brandFit[i].h / 2);
+    box.setAttribute("width", brandFit[i].w);
+    box.setAttribute("height", brandFit[i].h);
+    box.setAttribute("fill", "transparent");
+    g.appendChild(box);
     a.appendChild(g);
     return g;
   });
@@ -486,7 +509,7 @@ const brandFit = LETTER_BRANDS.map((key, i) => {
   const [bx, by, bw, bh] = [x0 / 10, y0 / 10, (x1 - x0) / 10, (y1 - y0) / 10];
   const col = (LETTER_EDGES[i + 1] < 1.5 ? LETTER_EDGES[i + 1] * VBW : VBW) - (LETTER_EDGES[i] > 0 ? LETTER_EDGES[i] * VBW : 0);
   const s = Math.min(BRAND_H / bh, (col - 1.2) / bw);
-  return { x: LETTER_CENTERS[i] * VBW - (bx + bw / 2) * s, y: VBH / 2 - (by + bh / 2) * s, s };
+  return { x: LETTER_CENTERS[i] * VBW - (bx + bw / 2) * s, y: VBH / 2 - (by + bh / 2) * s, s, w: bw * s, h: bh * s }; // (w, h: the mark's own box, in viewBox units)
 });
 
 // Rasterise shapes (drawn by `draw(ctx)` in viewBox units) into the texture layout both faces share:
@@ -608,9 +631,9 @@ uniform sampler2D uBlue;
 
 #define PUSH_AMT 0.6       // radial push, × pointer radius
 #define DEFLECT 0.35       // sideways deflection at speed, × pointer radius
-#define RING 0.75          // density piled up where the pushed field compresses
+#define RING 0.35   // density piled up where the pushed field compresses (it was 0.75: a second, visible orbit)
 #define THIN 0.6           // density cleared inside the pointer's reach (its gradient reads clean)
-#define WAKE 0.5           // density in the short wake behind a moving pointer
+#define WAKE 0.3   // density in the short wake behind a moving pointer (it was 0.5)
 #define STRETCH 0.1        // the push stretches this much along the motion at speed (subtle)
 #define BREATHE 0.03       // the pointer's radius breathes this much, slowly
 #define WAVE_SPEED 1.05    // screen heights per second (passes the farthest corner within its life)
@@ -712,8 +735,10 @@ precision highp float;
 #define SEA_SCALE 0.3      // swell size, screen heights
 #define SEA_SPEED 0.05     // swell speed
 #define SEA_RIPPLE 0.07    // ripple frequency, per cell (≈ 14-cell clusters)
-#define GRAD_R 0.6         // the pointer's gradient: radius (gaussian, × the push radius)…
-#define GRAD_D 0.95        // …and its density at the centre (brighter and tighter over a letter-link)
+#define GRAD_R 0.7   // the pointer's gradient: radius (gaussian, × the push radius), a little wider and softer than it was (0.6)…
+#define GRAD_D 0.5   // …its density at the centre: it was 0.95, which read as a bright white orbit round the ring; now it is a faint haze…
+#define GRAD_TONE0 0.12    // the gradient's dots: brightness at its edge…
+#define GRAD_TONE1 0.42    // …and at its centre (the ring itself stays full white)
 #define MOAT 1.5           // a thin dark moat around the nucleus, out to this × its radius
 #define HOLE 0.5           // …and the nucleus is a ring: its black hole is this × the nucleus radius
 #define FLICK_C 0.8        // every dot wanders between random brightnesses at its own pace: how deep (the field)…
@@ -1043,8 +1068,8 @@ void main() {
     float eOn = smoothstep(th2 - 0.25, th2 + 0.25, uE.z * 1.5 - 0.25) * clamp((eLum - th) / (DOT_FADE * eLum + 0.004), 0.0, 1.0);
     if (eOn > on) {
       on = eOn;
-      tone = mix(0.45, 1.0, g);
-      tint = vec3(1.0);
+      tone = mix(GRAD_TONE0, GRAD_TONE1, g); // dim, and cool like the field's own dots, never white: only the ring is bright
+      tint = FIELD_TINT;
     }
   }
   // the nucleus is a ring of dots round a black hole, set off by the dark moat; its dots light in at random too
@@ -1078,6 +1103,7 @@ uniform vec4  uUF;        // keyboard focus underline under one of them: centre 
 uniform vec3  uThemeT;    // the theme change: from, to (0 dark … 1 light), progress
 uniform vec3  uThemeO;    // …where it spreads from on the screen: x, y (device px), the farthest corner's distance
 uniform float uHalo;      // 0..1: a one-cell ground-coloured outline round the icons (they sit over magnified pixels)
+uniform float uTime;
 
 #define BG_D vec3(0.0)
 #define FG_D vec3(0.9412, 0.9373, 0.9176)
@@ -1087,6 +1113,16 @@ uniform float uHalo;      // 0..1: a one-cell ground-coloured outline round the 
 #define LIGHT_OVER ${LIGHT_OVER}
 #define THEME_SOFT ${THEME_SOFT}
 #define THEME_SPATIAL ${THEME_SPATIAL}
+// the letters' material (the same numbers as the scene shader's): the icons are dots like them
+#define ICON_DENS 0.95     // share of lattice sites lit inside an icon (the letters have 0.72; a little more, at this small size)
+#define ICON_EDGE 0.9      // the icon's edge: width of the density ramp, in cells (the letters' is ~3.6 cells on a ~90-cell wordmark)
+#define DOT_FADE 0.12
+#define DOT_FLOOR 0.3
+#define TONE_L 0.97
+#define TWINKLE 0.3
+#define FLICK_L 0.4
+#define FLICK_L_INK 0.22
+#define LIGHT_INK 0.7
 
 float hash12(vec2 p) {
   vec3 p3 = fract(vec3(p.xyx) * 0.1031);
@@ -1097,21 +1133,22 @@ float blue(vec2 p) {
   return texture2D(uBlue, (mod(p, 64.0) + 0.5) / 64.0).r;
 }
 
-// the icons, in solid pixels (tp: cells from the icon's centre, R: its radius in cells)
-float moonCov(vec2 tp, float R) { // a disc with a bite out of its upper right
-  return step(length(tp), R) * step(0.82 * R, length(tp - vec2(0.42, 0.32) * R));
+// the icons as signed distances (cells, + inside; tp: cells from the icon's centre, R: its radius in cells)
+float moonSd(vec2 tp, float R) { // a disc with a bite out of its upper right
+  return min(R - length(tp), length(tp - vec2(0.42, 0.32) * R) - 0.82 * R);
 }
-float sunCov(vec2 tp, float R) { // a small disc and eight short rays
-  float ak = mod(atan(tp.y, tp.x + 0.0001) + 0.3927, 0.7854) - 0.3927;
+float sunSd(vec2 tp, float R) { // a small disc and eight short rays
   float d = length(tp);
-  return max(step(d, 0.4 * R), step(abs(sin(ak)) * d, 0.9) * step(0.62 * R, d) * step(d, R));
+  float ak = mod(atan(tp.y, tp.x + 0.0001) + 0.3927, 0.7854) - 0.3927;
+  float ray = min(1.15 - abs(sin(ak)) * d, min(d - 0.6 * R, R - d));
+  return max(0.4 * R - d, ray);
 }
-float frameCov(vec2 tp, float R) { // four corner brackets round a centre pixel: "fit to the screen"
+float frameSd(vec2 tp, float R) { // four corner brackets round a centre pixel: "fit to the screen"
   vec2 q = abs(tp);
   float m = 0.92 * R;
   float e = max(q.x, q.y);
-  float brk = step(m - 2.2, e) * step(e, m) * step(m - 0.56 * R, min(q.x, q.y));
-  return max(brk, step(e, 1.5));
+  float brk = min(min(e - (m - 3.2), m - e), min(q.x, q.y) - (m - 0.62 * R));
+  return max(brk, 2.2 - e);
 }
 
 // the on-screen icons at this screen cell: rgb and alpha (0 = show the zoomed scene)
@@ -1132,28 +1169,47 @@ vec4 uiAt(vec2 cell) {
   float th2 = blue(cell + vec2(29.0, 13.0));
   float moonNow = 1.0 - step(0.5, flip); // a moon in the dark theme, a sun in the light one
 
-  // coverage here and (for the outline) in the eight cells round it
-  float covT = 0.0;
-  float covZ = 0.0;
+  // distance to each icon here, and (for the outline) whether any of the eight cells round it is inside one
+  float sdT = -1000.0;
+  float sdZ = -1000.0;
   float ring = 0.0;
   for (int j = -1; j <= 1; j++) {
     for (int i = -1; i <= 1; i++) {
       vec2 cc = c + vec2(float(i), float(j));
-      float ct = 0.0;
-      float cz = 0.0;
-      if (nearT) ct = mix(sunCov(cc - uTog.xy, uTog.z), moonCov(cc - uTog.xy, uTog.z), moonNow);
-      if (nearZ) cz = frameCov(cc - uZb.xy, uZb.z);
+      float st = -1000.0;
+      float sz = -1000.0;
+      if (nearT) st = mix(sunSd(cc - uTog.xy, uTog.z), moonSd(cc - uTog.xy, uTog.z), moonNow);
+      if (nearZ) sz = frameSd(cc - uZb.xy, uZb.z);
       if (i == 0 && j == 0) {
-        covT = ct;
-        covZ = cz;
+        sdT = st;
+        sdZ = sz;
       }
-      ring = max(ring, max(ct * step(0.002, uTog.w), cz * step(0.002, uZb.w)));
+      ring = max(ring, max(step(0.0, st) * step(0.002, uTog.w), step(0.0, sz) * step(0.002, uZb.w)));
     }
   }
-  float icT = covT * smoothstep(th2 - LIGHT_SOFT, th2 + LIGHT_SOFT, uTog.w * LIGHT_OVER - LIGHT_SOFT);
-  float icZ = covZ * smoothstep(th2 - LIGHT_SOFT, th2 + LIGHT_SOFT, uZb.w * LIGHT_OVER - LIGHT_SOFT);
-  float on = max(icT, icZ);
-  float tone = icT >= icZ ? 0.92 + 0.08 * uHot.x : 0.92 + 0.08 * uHot.y;
+  float covT = smoothstep(-ICON_EDGE, ICON_EDGE, sdT) * step(0.002, uTog.w);
+  float covZ = smoothstep(-ICON_EDGE, ICON_EDGE, sdZ) * step(0.002, uZb.w);
+  float cov = max(covT, covZ);
+  bool isT = covT >= covZ;
+  float amt = isT ? uTog.w : uZb.w;
+  float hot = isT ? uHot.x : uHot.y;
+  float arrive = smoothstep(th2 - LIGHT_SOFT, th2 + LIGHT_SOFT, amt * LIGHT_OVER - LIGHT_SOFT); // each dot lights at its own moment
+
+  // the same material as the letters: dots on the checkerboard lattice in the dark theme, solid ink in the light one, the
+  // edge a ramp of density the dots dither across, each dot twinkling and flickering at its own pace
+  float th = blue(cell);
+  float lum = (ICON_DENS + LIGHT_INK * flip) * cov;
+  float site = mix(1.0, 1.0 - mod(cell.x + cell.y, 2.0), smoothstep(0.2, 0.6, cov) * (1.0 - flip));
+  float on = site * clamp((lum - th) / (DOT_FADE * lum + 0.004), 0.0, 1.0) * arrive;
+  on *= step(DOT_FLOOR, on);
+  float h = hash12(cell + vec2(3.0, 9.0));
+  float tw = 0.5 + 0.5 * sin(uTime * (0.45 + 1.1 * h) + h * 60.0);
+  float fr = uTime * (0.5 + 1.7 * fract(h * 91.7 + 0.37)) + h * 97.0;
+  float fk = fract(fr);
+  fk = fk * fk * (3.0 - 2.0 * fk);
+  float fi = floor(fr);
+  float flick = mix(hash12(cell + vec2(fi * 17.3, 5.0)), hash12(cell + vec2((fi + 1.0) * 17.3, 5.0)), fk);
+  float tone = TONE_L * (1.0 - 0.35 * TWINKLE * tw) * (1.0 - mix(FLICK_L, FLICK_L_INK, flip) * (1.0 - sqrt(flick))) * mix(0.8, 1.0, hot);
 
   // keyboard focus: a dotted underline under the focused icon
   if (nearF && mod(cell.x + cell.y, 2.0) < 0.5 && blue(cell) < uUF.w) {
@@ -1163,7 +1219,9 @@ vec4 uiAt(vec2 cell) {
   vec3 ground = mix(BG_D, BG_L, flip);
   vec3 ink = mix(mix(BG_D, FG_D, on * tone), mix(BG_L, FG_L, on * tone), flip);
   if (on > 0.002) return vec4(ink, 1.0);
-  return vec4(ground, uHalo * ring);
+  // an icon's body has its own ground behind its dots (as a letter has: the scene's pixels do not show through its holes)
+  float body = step(0.5, cov);
+  return vec4(ground, max(body, uHalo * ring));
 }
 
 void main() {
@@ -1243,7 +1301,7 @@ function createScene() {
 
   const locs = (p, names) => Object.fromEntries(names.map((n) => [n, gl.getUniformLocation(p, n)]));
   const UF = locs(field, ["uDev", "uE", "uEV", "uER", "uW[0]", "uTime", "uBlue", "uCells", "uCell", "uIntro", "uLogo", "uTexScale", "uTexOff", "uTexPerCell", "uLet[0]", "uBrand", "uRev", "uRep", "uN", "uLink", "uPulse", "uSea", "uEnergy", "uFocus", "uFocusAmt", "uMask", "uThemeT", "uThemeO"]);
-  const UC = locs(compose, ["uField", "uBlue", "uCells", "uCell", "uZoom", "uPan", "uTog", "uZb", "uHot", "uUF", "uThemeT", "uThemeO", "uHalo"]);
+  const UC = locs(compose, ["uField", "uBlue", "uCells", "uCell", "uZoom", "uPan", "uTog", "uZb", "uHot", "uUF", "uThemeT", "uThemeO", "uHalo", "uTime"]);
 
   gl.useProgram(field);
   gl.uniform1i(UF.uMask, 0);
@@ -1393,6 +1451,7 @@ function createScene() {
     gl.uniform3f(UC.uThemeT, theme.from, theme.to, theme.p);
     gl.uniform3f(UC.uThemeO, tgx, tgy, Math.hypot(Math.max(tgx, dev[0] - tgx), Math.max(tgy, dev[1] - tgy)));
     gl.uniform1f(UC.uHalo, clamp01((view.z - 1) / 0.4));
+    gl.uniform1f(UC.uTime, state.time);
     gl.drawArrays(gl.TRIANGLES, 0, 3);
   }
 
@@ -1541,18 +1600,37 @@ function viewMoveAnchor(cx, cy) {
   view.ay = y;
 }
 function zoomBy(dlog, cx, cy) {
+  cancelAnim();
   viewAnchor(cx, cy);
   if (dlog) view.sign = Math.sign(dlog);
   view.raw = clamp(view.raw + dlog, 0, lzMax() + 4 * ZOOM_SOFT);
   view.last = performance.now();
 }
+// back to 100 %: one glide in which the zoom runs out (eased in and out, in log space) while the scene point at the middle of the
+// screen flies to the scene's own centre, so it arrives at 100 % without a lurch (a plain spring on the zoom alone drifted the
+// view sideways when the scene's edge caught it)
 function resetZoom() {
+  if (view.lz < 1e-3 && !view.tx && !view.ty) return;
   const r = heroBox();
-  viewAnchor(r.left + r.width / 2, r.top + r.height / 2); // zooming out round the middle of what is on screen
-  view.raw = 0;
-  view.last = -Infinity;
+  view.hold = false;
+  view.fx = view.fy = 0;
+  view.anim = {
+    t0: performance.now(),
+    dur: (RESET_BASE + RESET_PER_LOG * view.lz) * 1000,
+    lz0: view.lz,
+    sx0: (r.width / 2 - view.tx) / view.z,
+    sy0: (r.height / 2 - view.ty) / view.z,
+  };
+}
+// input of the user's takes over from a running glide, from wherever it is
+function cancelAnim() {
+  if (!view.anim) return;
+  view.anim = null;
+  view.raw = view.lz;
+  view.lv = 0;
 }
 function startPan(cx, cy) {
+  cancelAnim();
   viewAnchor(cx, cy);
   const r = heroBox();
   view.mt = performance.now();
@@ -1593,7 +1671,25 @@ function stepView(now, dt) {
   const r = heroBox();
   const hi = lzMax();
   const gliding = !v.hold && (v.fx !== 0 || v.fy !== 0);
-  const live = v.hold || gliding || now - v.last < ZOOM_IDLE_MS;
+  const flying = !!v.anim;
+  if (flying) {
+    const a = v.anim;
+    const u = clamp01((now - a.t0) / a.dur);
+    const e = u * u * u * (u * (u * 6 - 15) + 10); // smootherstep: no jerk at either end
+    v.lz = a.lz0 * (1 - e);
+    v.lv = 0;
+    v.raw = v.lz;
+    v.sx = a.sx0 + (r.width / 2 - a.sx0) * e;
+    v.sy = a.sy0 + (r.height / 2 - a.sy0) * e;
+    v.ax = r.width / 2;
+    v.ay = r.height / 2;
+    if (u >= 1) {
+      v.anim = null;
+      v.raw = v.lz = 0;
+      v.last = now; // (it settles from here)
+    }
+  }
+  const live = flying || v.hold || gliding || now - v.last < ZOOM_IDLE_MS;
   if (!live) {
     // settled: inside the limits, and at a zoom that makes every cell a whole number of device px. It goes the way the gesture
     // was going (in when zooming in, out when zooming out), so even a small gesture lands on the next step instead of
@@ -1604,7 +1700,7 @@ function stepView(now, dt) {
     v.raw = Math.log(Math.min(Math.exp(hi), Math.max(1, whole / cell)));
   }
   const target = live ? rubber(clamp(v.raw, 0, hi + 4 * ZOOM_SOFT), hi) : v.raw;
-  spring(v, "lz", "lv", target, [v.hold ? ZOOM_OMEGA_DIRECT : ZOOM_OMEGA, 1], dt);
+  if (!flying) spring(v, "lz", "lv", target, [v.hold ? ZOOM_OMEGA_DIRECT : ZOOM_OMEGA, 1], dt);
   if (Math.abs(target - v.lz) < 5e-4 && Math.abs(v.lv) < 2e-3) {
     v.lz = target;
     v.lv = 0;
@@ -1648,7 +1744,8 @@ window.addEventListener(
     if (!zoomOn()) return;
     e.preventDefault();
     const dy = e.deltaY * (e.deltaMode === 1 ? 16 : e.deltaMode === 2 ? 400 : 1);
-    zoomBy(-dy * (e.ctrlKey ? ZOOM_WHEEL_PINCH : ZOOM_WHEEL), e.clientX, e.clientY);
+    // a pinch (ctrl+wheel: deltaY < 0 when the fingers spread) zooms in as the fingers spread; plain scrolling follows the natural direction
+    zoomBy(e.ctrlKey ? -dy * ZOOM_WHEEL_PINCH : dy * ZOOM_WHEEL, e.clientX, e.clientY);
   },
   { passive: false }
 );
@@ -1747,6 +1844,7 @@ function touchEnd(e) {
   }
 }
 function pinchStart() {
+  cancelAnim();
   const [a, b] = [...fingers.values()];
   pinch = { d0: Math.max(1, Math.hypot(a.x - b.x, a.y - b.y)), raw0: view.raw };
   if (touch?.pan) html.classList.remove("panning");
@@ -1891,6 +1989,9 @@ html.addEventListener("pointerleave", pointerOff);
 // ------------------------------------------------------------------ loop
 const scene = createScene();
 makeBrandGroups();
+// The drawn letters are mirrored (a random identity per visit); the SVG letters, which are the links' hit areas, must be too,
+// or a tap lands on the unmirrored shape. (The no-WebGL fallback sets the same each frame.)
+letterGroups.forEach((g, i) => (g.style.transform = `scale(${letters[i].mx}, ${letters[i].my})`));
 if (scene) html.classList.add("gl");
 
 measureLogo();

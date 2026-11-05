@@ -291,6 +291,22 @@ a {
   -webkit-tap-highlight-color: transparent;
 }
 
+/* A link answers to the letter or the icon itself, and nothing round them (a tap near one used to open it: the whole column,
+   with its empty corners, was the target). So no box is hit-testable: only the letter's shape while it shows the letter, and the
+   mark's box while it shows the mark (hero.js sets .hit-lt / .hit-mk on each link as its shape changes, and both while the curtain
+   has revealed the mark round the pointer). Keyboard focus is unchanged: the whole link still takes it. */
+.logo .hit,
+.logo .lt path,
+.logo .mk-hit,
+.logo .bf path {
+  pointer-events: none;
+}
+
+.logo .ln.hit-lt .lt path,
+.logo .ln.hit-mk .mk-hit {
+  pointer-events: auto;
+}
+
 .logo .ln:focus-visible {
   outline: 1px solid var(--fg);
   outline-offset: 2px;
