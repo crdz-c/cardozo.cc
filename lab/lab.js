@@ -37,7 +37,7 @@ const P = {
   fit: q.get("fit") === "cover" ? "cover" : "contain", // cover: a card fills the screen at home
   rx: num("rx", 26), // the home pose: tilt back (deg)…
   ry: num("ry", -20), // …and turn sideways (deg)
-  thick: num("thick", 0.03), // the plate's thickness, × the disc's radius (a real CD is 0.02)
+  thick: num("thick", 0.02), // the plate's thickness, × the disc's radius: a real CD's (1.2 mm on a 60 mm radius)
   shade: num("shade", 0.35), // a face turned away from you gets this much darker (0 = flat)
   cell: num("cell", 1.2), // CSS px per dither cell (the hero's is ~1.2 on a desktop; never under 2 device px)
   dens: num("dens", 1.2), // share of lattice sites lit at full tone; above 1 the brightest tones saturate to a solid checkerboard (the hero's letters: 0.72)

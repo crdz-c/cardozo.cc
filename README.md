@@ -432,7 +432,7 @@ Query parameters, also live in `__lab.P` (change one, it applies on the next fra
 | `spin` | 40 for the CD, 0 for the rest | deg/s about the plate's own axis, positive clockwise |
 | `rx` / `ry` | 26 / -20 | the home pose: tilt back and turn sideways, degrees |
 | `size` / `fit` | 0.8 / `contain` | the plate's share of the screen at home (a disc's diameter, a card's longer side); `fit=cover` makes a card fill the screen |
-| `thick` / `shade` | 0.03 / 0.35 | the plate's thickness (a real CD: 0.02) and how much a slanted face darkens |
+| `thick` / `shade` | 0.02 / 0.35 | the plate's thickness, × the disc's radius (0.02 is a real CD's: 1.2 mm on 60), and how much a slanted face darkens |
 | `dens` | 1.2 | share of lattice sites lit at full tone (the hero's letters: 0.72); above 1 the brightest tones saturate to a solid checkerboard |
 | `black` / `white` / `gamma` | 0.3 / 0.9 / 1 | levels and curve applied to the luminance. The CD's body sits between 0.5 and 0.72, so it needs the stretch; a high-contrast picture wants `black=0&white=1` |
 | `lattice` | 1 | 0 prints free blue noise instead of the checkerboard (denser, more like a stipple) |
