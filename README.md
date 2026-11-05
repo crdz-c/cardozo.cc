@@ -19,7 +19,9 @@ hero.js      letter/mark textures, the dot-field shader, morphs, curtain, 9 s cy
 brands.js    the five brand marks as SVG path data
 raster.js    exact distance transform, corner rounding, blue-noise threshold map
 favicon.ico  the tab icon (16, 32, 48): the wordmark's C dissolving into pixels; favicon.png (64) and apple-touch-icon.png (180) too
-tools/       make-favicon.py draws those three from the C's outline and the site's blue-noise map (needs Pillow and node)
+lab/         the hero's dot material on its own, a stage for images, video loops and animations (see Lab); starts with a spinning CD
+tools/       make-favicon.py draws those three from the C's outline and the site's blue-noise map (needs Pillow and node);
+             make-cd.py cleans the lab's CD (takes the hand out of a photo of it; needs OpenCV and numpy)
 CNAME        custom domain for GitHub Pages
 ```
 
@@ -374,6 +376,57 @@ units (11.2 on small wordmarks) · `EDGE_REF` 90 · `EDGE_MIN` 0.45 · `HOLD_MS`
 `TOUCH_CURTAIN` 1.9 · `TOUCH_LIFT` 24 px · `ADAPT_MS` 26 · `ADAPT_MAX` 2 · `BRAND_ROUND` [4, 3] texels · `ROUND_OPEN` / `ROUND_CLOSE` 17 / 9 texels. Dark: ground `#000000`, dots `#f0efea`; light: ground `#ffffff`, dots `#000000`.
 
 Visual direction is inspired by christendijoux.com; the shader, motion and code here are original.
+
+## Lab
+
+`lab/` is the hero's material with nothing else on screen: no wordmark, links, pointer, curtain, waves, theme switch or zoom.
+It is a place to see what the dots do to an image, a video loop or an animation. Open <http://localhost:8000/lab/>: it starts
+with a CD spinning in the middle (`media/cd.png`, one turn in 9 s). It shares `raster.js` with the hero and nothing else, and
+it is `noindex`. (Pages serves it too, at `/lab/`.)
+
+**How it works.** The stage is a 2D canvas with one pixel per dither cell. Each frame the source is placed on it (scaled,
+rotated) and the hero's two passes run: *field* reads the stage per cell and lights dots (a cell's luminance is the
+density of its dots; bright areas sit on the checkerboard lattice so dots never fuse, as the letters do; dim ones are free
+blue noise, as the field is) and *compose* blows the cells up to exact squares. The dither is fixed to the screen, so a
+moving picture shimmers through it. Kept from the hero, with its numbers: the blue-noise dither, `DOT_FADE`, `DOT_FLOOR`,
+the per-dot twinkle and flicker, the ambient field with its calm sea (centred on the screen now), the build curve (dots
+land at random when a source appears, `?build=2.8` s). Different from it: the shape is a tone map, not a mask, so a dim
+tone's dots are only a little dimmer (`TONE_BRIGHT` 0.75, the hero's marks use 0.5) and the density carries the tone; a cell
+is `?cell=1.2` CSS px (what the wordmark has on a desktop). There is only the dark theme.
+
+**Put something on it.**
+
+| how | what |
+|---|---|
+| `?src=media/clip.mp4` | a URL (same origin, or CORS-enabled): image, animated GIF, mp4/webm (muted, looped). Put files in `lab/media/` |
+| drop or paste a file | the same, from disk or the clipboard; the dots build in again |
+| `?src=sketch:rings`, `sketch:sweep` | built-in animations drawn in JS (white on black) |
+| `__lab.sketch((ctx, t, W, H) => …)` | your own: draw on the stage in cell units, `t` in seconds |
+| `__lab.load(urlOrFileOrSketch)` | any of those from the console |
+
+Keys: `Space` pauses (spin, dots and video), `B` replays the build. Query parameters, also live in `__lab.P` (change one,
+it applies on the next frame; `cell` needs `__lab.resize()`):
+
+| param | default | |
+|---|---|---|
+| `spin` | 40 for the CD, 0 for the rest | deg/s, positive clockwise |
+| `size` / `fit` | 0.8 / `contain` | longer side as a share of the screen's shorter one; `fit=cover` fills the screen |
+| `dens` | 1.2 | share of lattice sites lit at full tone (the hero's letters: 0.72); above 1 the brightest tones saturate to a solid checkerboard |
+| `black` / `white` / `gamma` | 0.3 / 0.9 / 1 | levels and curve applied to the luminance. The CD's body sits between 0.5 and 0.72, so it needs the stretch; a high-contrast picture wants `black=0&white=1` |
+| `lattice` | 1 | 0 prints free blue noise instead of the checkerboard (denser, more like a stipple) |
+| `field` | 1 | the ambient dots round the picture, 0 … 1 |
+| `color` | 0 | 0 paper-white dots (the hero); 1 each dot takes its source's hue |
+| `flicker` | 1 | depth of the picture's flicker, × the hero's |
+| `build` | 2.8 | seconds the dots take to land; 0 turns the build off |
+
+`?dpr=` imitates another screen's pixel ratio. Debug: `__lab.step(ms)` advances the clock and draws (for a preview that
+throttles frames), `__lab.shot()` returns the screen as a PNG data URL, `__lab.info()` the cell size, canvas size and source.
+
+**The CD.** `tools/make-cd.py` makes `media/cd.png` from a picture of a CD held in a hand (not in the repo): it finds the hand,
+fits an ellipse to the rim and warps the disc to a true circle, makes the hub concentric with the rim (it sat 17 px off, which
+would wobble as the disc spins) while keeping every wedge radial, mirrors the hub's good half over the thumb's, repeats another
+stretch of the wedge sequence over the hand with the seam where the colours match best, and writes a 1024² sprite with the disc
+at 92 %. It is a one-off tuned on one picture. A photo of a different CD needs new constants.
 
 ## Deploy
 
