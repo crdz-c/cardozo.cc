@@ -18,6 +18,8 @@ style.css    layout; under .gl the SVG stays in place but transparent (the shade
 hero.js      letter/mark textures, the dot-field shader, morphs, curtain, 9 s cycle, pointer, waves, sea, loading
 brands.js    the five brand marks as SVG path data
 raster.js    exact distance transform, corner rounding, blue-noise threshold map
+favicon.ico  the tab icon (16, 32, 48): the wordmark's C dissolving into pixels; favicon.png (64) and apple-touch-icon.png (180) too
+tools/       make-favicon.py draws those three from the C's outline and the site's blue-noise map (needs Pillow and node)
 CNAME        custom domain for GitHub Pages
 ```
 
@@ -171,7 +173,9 @@ cycle restarts from its hold 3 s after the last input, so it never jumps. A lett
   own moment on the way in and on the way out (the same blue-noise-rank switching, `MORPH_*`). The second pulse runs
   its energy-cancelling band through the marks the first one revealed, and holds them a little longer: a click 400
   px away shows the marks about half a second after it arrives, for roughly 0.6 s, and the letters re-form behind.
-- **Size.** The wordmark is 39 vw wide (60 vw under 700 px), fixed in the exact centre.
+- **Size.** The wordmark is 39 vw wide, fixed in the exact centre. Under 700 px: held upright (portrait) it spans the page
+  minus its own padding (`100vw − 2 × --pad`: a 343 px wordmark with 16 px margins on a 375 px phone), held sideways
+  (landscape) 60 vw.
 
 ## Touch
 
@@ -189,8 +193,15 @@ Details. The curtain is `TOUCH_CURTAIN` 1.9× the mouse's radius and sits `TOUCH
 (eased in with `state.cur.tk`, 0 mouse … 1 touch), because a fingertip covers a mouse-sized disc; the mouse's ring and
 gradient are not drawn under a finger. The revealed marks hide by themselves after `REVEAL_HIDE_MS` 8 s untouched (any
 touch restarts it), and when the page is left (`visibilitychange`, e.g. after opening a link in a new tab). The marks are
-pinned the same way keyboard focus pins one (`pinned()`); `touch-action: manipulation` removes double-tap zoom (pinch still
-works) and `-webkit-touch-callout: none` the link menu a long press would open.
+pinned the same way keyboard focus pins one (`pinned()`).
+
+**Nothing may take the finger.** `html` is `overflow: hidden` with `overscroll-behavior: none`, and `html`, `body` and `.hero`
+are `touch-action: pinch-zoom` (no single-finger pan, no double-tap zoom; the hero no longer has a `min-height`, which used
+to make a landscape phone scroll). Without that a vertical drag was taken for a scroll or a rubber-band and the browser
+cancelled the pointer, so the hold never worked upright. The page has no text to select (`user-select: none`,
+`-webkit-touch-callout: none`, and a `contextmenu` guard on touch): otherwise a held finger on a phone is taken for text
+and iOS opens "Look Up" (Android shows selection handles), and `::selection`, painted in the text colour, left a white
+edge on the dark theme.
 
 ## How things appear
 

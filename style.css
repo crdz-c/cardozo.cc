@@ -44,6 +44,22 @@
 html {
   -webkit-text-size-adjust: 100%;
   background: var(--bg);
+  overflow: hidden; /* one screen: nothing scrolls, so a finger's drag is never taken for a scroll or a rubber-band */
+  overscroll-behavior: none;
+}
+
+/* The page has no text to select, and a press-and-hold is a gesture of its own (the curtain). Without this a phone takes
+   a held finger for a text selection (iOS "Look Up", Android's handles; ::selection paints in the text colour, a white
+   edge on the dark theme), and a vertical drag for a scroll (the browser then cancels the pointer). Pinch zoom of the
+   page is kept (single-finger panning is not). */
+html,
+body {
+  touch-action: none;
+  touch-action: pinch-zoom;
+  -webkit-user-select: none;
+  user-select: none;
+  -webkit-touch-callout: none;
+  -webkit-tap-highlight-color: transparent;
 }
 
 body {
@@ -85,7 +101,8 @@ a {
 /* ---------------------------------------------------------------- stage */
 
 .hero {
-  touch-action: manipulation; /* no double-tap zoom, so a quick second tap is a tap (pinch zoom still works) */
+  touch-action: none;
+  touch-action: pinch-zoom; /* no single-finger pan and no double-tap zoom, so a drag is ours and a quick second tap is a tap */
   position: relative;
   isolation: isolate;
   display: flex;
@@ -93,7 +110,6 @@ a {
   justify-content: space-between;
   height: 100vh;
   height: 100svh;
-  min-height: 520px;
   padding: var(--pad);
   background: var(--bg);
   overflow: hidden;
@@ -223,7 +239,13 @@ a {
 
 /* ---------------------------------------------------------------- small screens */
 
-@media (max-width: 699.98px) {
+/* a phone held upright: the wordmark nearly spans the screen (the margin is the page's own padding); held sideways it stays
+   modest, as the screen is already wide */
+@media (max-width: 699.98px) and (orientation: portrait) {
+  .logo { width: calc(100vw - 2 * var(--pad)); }
+}
+
+@media (max-width: 699.98px) and (orientation: landscape) {
   .logo { width: 60vw; }
 }
 
