@@ -12,7 +12,7 @@
 // ?word=1.1  s a word takes to land   ?gap=0.3  s between words   ?fill=0.3  s a pixel takes to fill in   ?flash=0.2  s of its flash
 // ?order=random|ltr  (ltr: a word fills left to right, with some scatter)   ?loop=0  s of rest before it all happens again (0: once)
 // The timing knobs are live in lab.source.opts.
-import { buildInverse } from "../engine.js";
+import { buildInverse, landTime, pixelState, textTime } from "../math.js";
 
 const U = 41; // px per em at which one pixel of Jersey 25 is one px
 const ASC = 25; // its ascender, in pixels (and the cap height is a little under)
@@ -38,10 +38,11 @@ export default {
   async create(h, arg = {}) {
     await loadFont();
     const opts = { word: h.num("word", 1.1), gap: h.num("gap", 0.3), fill: h.num("fill", 0.3), flash: h.num("flash", 0.2), loop: h.num("loop", 0) };
-    const order = h.q.get("order") === "ltr" ? "ltr" : "random";
-    const left = h.q.get("align") === "left";
-    const leading = h.num("leading", 1);
-    const text = arg.text ?? h.q.get("text") ?? "feeling\nnostalgic?";
+    const opt = (k) => arg[k] ?? h.q.get(k); // (the call's options beat the query's)
+    const order = opt("order") === "ltr" ? "ltr" : "random";
+    const left = opt("align") === "left";
+    const leading = Number.isFinite(parseFloat(opt("leading"))) ? parseFloat(opt("leading")) : 1;
+    const text = opt("text") ?? "feeling\nnostalgic?";
     const lines = text
       .replace(/\\n|\|/g, "\n")
       .split("\n")
@@ -133,13 +134,12 @@ export default {
 
     function update(t) {
       const o = source.opts;
-      const total = (nWords - 1) * (o.word + o.gap) + o.word + o.fill + 3 * o.flash;
-      const tt = o.loop > 0 ? t % (total + o.loop) : t;
+      const tt = textTime(t, nWords, o);
       for (let b = 0; b < idx.length; b++) {
-        const dt = tt - (word[b] * (o.word + o.gap) + when[b] * o.word); // seconds since this pixel landed
+        const [amt, flash] = pixelState(tt, landTime(word[b], when[b], o), o);
         const i = idx[b];
-        data[i + 1] = dt <= 0 ? 0 : Math.min(1, dt / o.fill) * 255;
-        data[i + 2] = dt <= 0 ? 0 : Math.exp(-dt / o.flash) * 255;
+        data[i + 1] = amt * 255;
+        data[i + 2] = flash * 255;
       }
     }
 
@@ -151,9 +151,11 @@ export default {
       pixel: true,
       dynamic: true,
       raw: { w: texW, h: texH, data },
+      wordOf, // per pixel: its word (255: none)
       plate: { disc: false, ax, ay, hole: 0, half: [ax, ay], pixelGrid: { w: texW, h: texH } },
       opts,
       update,
+      words, // [{ text, x, base }] in font pixels
       info: { words: nWords, pixels: idx.length, grid: [texW, texH], phase: [phx, phy], edgesOnGrid: [+(px[phx] / px.reduce((a, b) => a + b, 0)).toFixed(3), +(py[phy] / py.reduce((a, b) => a + b, 0)).toFixed(3)] },
     };
     update(0);

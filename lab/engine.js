@@ -18,9 +18,9 @@
 // (see createEngine's comments). Every knob is also a query parameter of the same name, and lives in the returned `P`.
 import { blueNoise } from "../raster.js";
 import picture from "./models/picture.js";
+import { clamp, clamp01, FOCAL, buildProgress, buildInverse, qmul, qnorm, qaxis, qslerp, qmat, mmul, toGL, toGLT, plateDistance, pixelLayout } from "./math.js";
 
-const clamp = (v, lo, hi) => Math.min(hi, Math.max(lo, v));
-const clamp01 = (v) => clamp(v, 0, 1);
+export { buildProgress, buildInverse };
 
 // the engine's defaults; a model overrides some, a query parameter of the same name overrides both
 export const GENERIC_PARAMS = {
@@ -44,7 +44,6 @@ export const GENERIC_PARAMS = {
 };
 
 // camera and gestures
-const FOCAL = 2; // the camera's focal length, in units of the screen's shorter side (the disc's radius is 1)
 const ROT_PER_SIDE = 3.4; // rad: dragging across the screen's shorter side turns the model this far
 const FRICTION = 4; // 1/s: how fast a released turn slows
 const FOLLOW_DRAG = 26; // 1/s: the shown pose follows the dragged one (fluid, a little behind)…
@@ -58,7 +57,7 @@ const ZOOM_FOLLOW = 14;
 const MOUSE_SLOP = 4; // CSS px a press must move to be a turn instead of a tap
 const TOUCH_SLOP = 10;
 const TAP_MS = 450;
-const STEP = 0.26; // rad per arrow key press
+const STEP = Math.PI / 12; // an arrow key press turns 15°
 
 // the wave (the hero's numbers)
 const WAVE_LIFE = 3.2; // s: a wave's whole life
@@ -68,56 +67,7 @@ const WAVE_PULSE_DECAY = 0.15; // …each this much weaker than the one before
 const MAX_WAVES = 8;
 const AFTERGLOW = 2.8; // s: decay time of the stirred-up energy (the sea's swell)
 
-// ------------------------------------------------------------------ the build
-// How fast dots land (Lucas's sketch, the same as hero.js's BUILD_RATE): [from t, to t, from v, to v, shape], shape 0 linear,
-// k > 0 a decay fast first then flat, -1 an abrupt jump. The fill is the integral, normalised so it ends exactly at 1.
-const BUILD_RATE = [
-  [0, 0.207, 0, 1, 0],
-  [0.207, 0.32, 1, 0.19, 3],
-  [0.32, 0.387, 0.19, 0.47, 0],
-  [0.387, 0.563, 0.47, 0.22, 2.5],
-  [0.563, 0.573, 0.22, 0.95, -1],
-  [0.573, 0.766, 0.95, 0.33, 2.5],
-  [0.766, 0.777, 0.33, 0.95, -1],
-  [0.777, 0.992, 0.95, 0.51, 0.6],
-  [0.992, 1, 0.51, 0.51, 0],
-];
-function buildRate(t) {
-  for (const [t0, t1, v0, v1, k] of BUILD_RATE) {
-    if (t > t1) continue;
-    const u = clamp01((t - t0) / (t1 - t0));
-    const f = k === -1 ? u * u * (3 - 2 * u) : k > 0 ? (1 - Math.exp(-k * u)) / (1 - Math.exp(-k)) : u;
-    return v0 + (v1 - v0) * f;
-  }
-  return 0;
-}
-const BUILD_TABLE = (() => {
-  const n = 2048;
-  const tab = new Float32Array(n + 1);
-  for (let i = 1; i <= n; i++) tab[i] = tab[i - 1] + buildRate((i - 0.5) / n) / n;
-  for (let i = 0; i <= n; i++) tab[i] /= tab[n];
-  return tab;
-})();
-// the share (0 … 1) that has landed at moment t (0 … 1) of a build…
-export function buildProgress(t) {
-  const n = BUILD_TABLE.length - 1;
-  const x = clamp01(t) * n;
-  const i = Math.min(n - 1, Math.floor(x));
-  return BUILD_TABLE[i] + (BUILD_TABLE[i + 1] - BUILD_TABLE[i]) * (x - i);
-}
-// …and the moment by which a share p has landed (the inverse: a site of rank p lands then)
-export function buildInverse(p) {
-  const n = BUILD_TABLE.length - 1;
-  let lo = 0;
-  let hi = n;
-  while (hi - lo > 1) {
-    const mid = (lo + hi) >> 1;
-    if (BUILD_TABLE[mid] < p) lo = mid;
-    else hi = mid;
-  }
-  const span = BUILD_TABLE[hi] - BUILD_TABLE[lo] || 1;
-  return (lo + clamp01((p - BUILD_TABLE[lo]) / span)) / n;
-}
+// (the build curve, the quaternions and the layout maths are in math.js)
 
 // ------------------------------------------------------------------ shaders
 const VERT = `
@@ -407,43 +357,6 @@ void main() {
 }
 `;
 
-// ------------------------------------------------------------------ quaternions [x, y, z, w] and 3×3 matrices (row-major arrays of 9)
-const qmul = (a, b) => [
-  a[3] * b[0] + a[0] * b[3] + a[1] * b[2] - a[2] * b[1],
-  a[3] * b[1] - a[0] * b[2] + a[1] * b[3] + a[2] * b[0],
-  a[3] * b[2] + a[0] * b[1] - a[1] * b[0] + a[2] * b[3],
-  a[3] * b[3] - a[0] * b[0] - a[1] * b[1] - a[2] * b[2],
-];
-const qnorm = (a) => {
-  const l = Math.hypot(a[0], a[1], a[2], a[3]) || 1;
-  return a.map((v) => v / l);
-};
-const qaxis = (x, y, z, ang) => {
-  const l = Math.hypot(x, y, z) || 1;
-  const s = Math.sin(ang / 2) / l;
-  return [x * s, y * s, z * s, Math.cos(ang / 2)];
-};
-function qslerp(a, b, t) {
-  let d = a[0] * b[0] + a[1] * b[1] + a[2] * b[2] + a[3] * b[3];
-  const s = d < 0 ? -1 : 1; // (the short way round)
-  d = Math.abs(d);
-  const bb = b.map((v) => v * s);
-  if (d > 0.9995) return qnorm(a.map((v, i) => v + (bb[i] - v) * t));
-  const th = Math.acos(d);
-  const sn = Math.sin(th);
-  const wa = Math.sin((1 - t) * th) / sn;
-  const wb = Math.sin(t * th) / sn;
-  return a.map((v, i) => v * wa + bb[i] * wb);
-}
-const qmat = ([x, y, z, w]) => [1 - 2 * (y * y + z * z), 2 * (x * y - z * w), 2 * (x * z + y * w), 2 * (x * y + z * w), 1 - 2 * (x * x + z * z), 2 * (y * z - x * w), 2 * (x * z - y * w), 2 * (y * z + x * w), 1 - 2 * (x * x + y * y)];
-const mmul = (a, b) => {
-  const r = new Array(9);
-  for (let i = 0; i < 3; i++) for (let j = 0; j < 3; j++) r[i * 3 + j] = a[i * 3] * b[j] + a[i * 3 + 1] * b[3 + j] + a[i * 3 + 2] * b[6 + j];
-  return r;
-};
-const toGL = (m) => new Float32Array([m[0], m[3], m[6], m[1], m[4], m[7], m[2], m[5], m[8]]); // R, column-major
-const toGLT = (m) => new Float32Array(m); // R's transpose, column-major, is R row-major
-
 const VIDEO_RE = /\.(mp4|webm|mov|m4v|ogv)(\?|#|$)/i;
 const GIF_RE = /\.gif(\?|#|$)/i;
 
@@ -652,6 +565,7 @@ export function createEngine({ canvas, query: q = new URLSearchParams(location.s
     plate = next.plate ?? plateFor(next);
     texDirty = true;
     buildT0 = clock;
+    spinAngle = 0; // (a card put on after the CD must not inherit the CD's turn)
     configureTexture(!!next.pixel);
     resetView(true);
   }
@@ -733,21 +647,8 @@ export function createEngine({ canvas, query: q = new URLSearchParams(location.s
   // pixel art how it is snapped: a pixel is a whole number of cells (P.px of them, or as many as fit P.size of the screen), the
   // sheet's edge on a cell boundary, so every pixel is a square of the same cells and the dither never cuts one in two.
   function layout() {
-    if (plate.pixelGrid) {
-      const { w, h } = plate.pixelGrid;
-      const px = P.px > 0 ? Math.floor(P.px) : Math.max(1, Math.min(Math.floor((P.size * cells[0]) / w), Math.floor((P.size * cells[1]) / h)));
-      const m = Math.min(cells[0], cells[1]);
-      const left = cells[0] / 2 - (w * px) / 2;
-      const bottom = cells[1] / 2 - (h * px) / 2;
-      // (the sheet is as thick as the shader's 1e-4: its front face is that much nearer than its centre)
-      return { dist: (2 * FOCAL * plate.ax * m) / (w * px) + 1e-4, off: [Math.round(left) - left, Math.round(bottom) - bottom], px };
-    }
-    const W = canvas.clientWidth || innerWidth;
-    const H = canvas.clientHeight || innerHeight;
-    const m = Math.min(W, H);
-    const a = plate.ax / W;
-    const b = plate.ay / H;
-    return { dist: P.fit === "cover" ? 2 * FOCAL * m * Math.min(a, b) : (2 * FOCAL * m * Math.max(a, b)) / P.size, off: [0, 0], px: 0 };
+    if (plate.pixelGrid) return pixelLayout(cells, plate.pixelGrid, plate.ax, P.size, P.px); // (the sheet is as thick as the shader's 1e-4)
+    return { dist: plateDistance(plate, canvas.clientWidth || innerWidth, canvas.clientHeight || innerHeight, P.size, P.fit), off: [0, 0], px: 0 };
   }
 
   const waveData = new Float32Array(MAX_WAVES * 4);

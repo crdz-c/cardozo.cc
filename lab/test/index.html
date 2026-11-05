@@ -1,0 +1,22 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>lab tests (running…)</title>
+    <meta name="robots" content="noindex" />
+    <style>
+      /* The browser tests of the lab: results on the left, the canvas the engine draws on at the right (800 × 600 CSS px, 1× so a cell is 2 px). */
+      body { margin: 0; background: #111; color: #ddd; font: 13px/1.5 ui-monospace, Menlo, monospace; display: grid; grid-template-columns: minmax(0, 1fr) 800px; align-items: start; }
+      #out { margin: 0; padding: 16px; white-space: pre-wrap; }
+      .ok { color: #7c7; }
+      .fail { color: #f77; }
+      .sum { color: #fff; font-weight: bold; }
+      canvas { display: block; width: 800px; height: 600px; background: #000; }
+    </style>
+  </head>
+  <body>
+    <pre id="out">running…</pre>
+    <div><canvas id="c"></canvas></div>
+    <script type="module" src="browser.js"></script>
+  </body>
+</html>
