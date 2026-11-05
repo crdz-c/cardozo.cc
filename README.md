@@ -19,7 +19,7 @@ hero.js      letter/mark textures, the dot-field shader, morphs, curtain, 9 s cy
 brands.js    the five brand marks as SVG path data
 raster.js    exact distance transform, corner rounding, blue-noise threshold map
 favicon.ico  the tab icon (16, 32, 48): the wordmark's C dissolving into pixels; favicon.png (64) and apple-touch-icon.png (180) too
-lab/         the hero's dot material on its own, on a 3D model you can turn: the CD, or any image, video loop or animation (see Lab)
+lab/         the hero's dot material on its own, on 3D models you can turn: the CD, pixel text in Jersey 25, any picture or loop (see Lab, and lab/LEARNINGS.md)
 tools/       make-favicon.py draws those three from the C's outline and the site's blue-noise map (needs Pillow and node);
              make-cd.py cleans the lab's CD (takes the hand out of a photo of it; needs OpenCV and numpy)
 CNAME        custom domain for GitHub Pages
@@ -379,10 +379,32 @@ Visual direction is inspired by christendijoux.com; the shader, motion and code 
 
 ## Lab
 
-`lab/` is the hero's material with nothing else on screen (no wordmark, links, curtain, theme switch or zoom) on a **model you can
-turn**. Open <http://localhost:8000/lab/>: it starts with the CD in 3D, spinning about its own axis (`media/cd.png`, one turn in
-9 s). Drag to turn it, scroll or pinch to move in and out, click for the wave. It shares `raster.js` with the hero and nothing
-else, and it is `noindex`. (Pages serves it too, at `/lab/`.)
+`lab/` is the hero's material with nothing else on screen (no wordmark, links, curtain, theme switch or zoom) on **models you can
+turn**: the CD, pixel text in Jersey 25, or any picture, video loop or animation. Open <http://localhost:8000/lab/>. It shares
+`raster.js` with the hero and nothing else, and it is `noindex`. (Pages serves it too, at `/lab/`.) What was learned building it,
+and what was tried and dropped, is in [lab/LEARNINGS.md](lab/LEARNINGS.md).
+
+```
+lab/index.html     the page: one canvas
+lab/lab.js         picks the model (?model=cd | text | picture) and runs the engine
+lab/engine.js      the reusable engine: the hero's material on a 3D plate you turn; dolly, the wave, the build
+lab/models/        cd.js · text.js · picture.js (index.js lists them): what goes on the plate and how it is shown
+lab/media/cd.png   the CD's sprite, made by tools/make-cd.py
+lab/fonts/         Jersey 25 (SIL OFL, from google/fonts) for the text model
+```
+
+**Models, and using the engine elsewhere.** A model is `{ id, params, create(helpers, arg) → source }`: `params` are the knobs it
+changes from the engine's defaults, `create` returns what goes on the plate (see the comment at the top of `engine.js` for the
+source's shape). The CD is the reusable asset: `models/cd.js` + `media/cd.png` + `tools/make-cd.py`. To put it, or any model, in
+another page (ES modules, no build):
+
+```js
+import { createEngine } from "./lab/engine.js";
+import cd from "./lab/models/cd.js";
+const lab = createEngine({ canvas: document.querySelector("canvas") });
+await lab.useModel(cd);
+lab.run();
+```
 
 **How it works.** The plate is not a mesh. For every dither cell the *field* pass casts a ray from a perspective camera and meets
 the plate analytically: a **disc** (two faces, the rim, and the wall of the hole, which is 0.118 of the CD's radius) or a **card**
@@ -392,7 +414,7 @@ is the density of its dots; bright areas sit on the checkerboard lattice so dots
 blue noise, as the field is. A face turned away is a little darker (`shade`), its far side darker still, and a wall catches a light
 from the upper left. The dither is fixed to the screen, so the model turns under it. *Compose* then blows the cells up to exact
 squares. Kept from the hero, with its numbers: the blue-noise dither, `DOT_FADE`, `DOT_FLOOR`, the per-dot twinkle and flicker, the
-ambient field with its calm sea (centred on the screen now), the build curve (dots land at random when a source appears,
+ambient field with its calm sea (centred on the screen now), the build curve (dots land at random when a picture appears,
 `?build=2.8` s) and the wave. Different from it: the shape is a tone map, not a mask, so a dim tone's dots are only a little
 dimmer (`TONE_BRIGHT` 0.75, the hero's marks use 0.5) and the density carries the tone; a cell is `?cell=1.2` CSS px (what the
 wordmark has on a desktop). There is only the dark theme.
@@ -404,7 +426,7 @@ wordmark has on a desktop). There is only the dark theme.
 | drag (mouse, one finger) | turns the model about the screen's axes, the near side following the pointer; across the screen's shorter side is 195° (`ROT_PER_SIDE` 3.4 rad). The shown pose follows the dragged one eased (`FOLLOW_DRAG` 26/s: fluid, a little behind). On release it keeps gliding at the speed of the last ~50 ms of the drag (at most `MAX_SPIN_RATE` 16 rad/s) and slows (`FRICTION` 4/s); a touch stops it; held still before letting go means no glide |
 | wheel, pinch, two fingers, `+` `-` | dolly the camera in and out, eased (`ZOOM_FOLLOW` 14/s), between ×0.43 and ×2.6; scrolling down moves in, as on the hero, and so does a pinch apart |
 | arrows | turn by 15° |
-| `R` or `0` | back to the home pose (`rx` 26° tilt, `ry` -20°) and distance |
+| `R` or `0` | back to the home pose (`rx` 26° tilt, `ry` -20°; the text model's is flat) and distance |
 | click or tap | a press that does not move (under `MOUSE_SLOP` 4 px, 10 on touch) and is released within 450 ms sends the wave from there |
 | `Space`, `B` | pause (spin, dots, waves and video; the model can still be turned), replay the build |
 
@@ -414,7 +436,27 @@ density, the field thins behind the front and the dots' energy is cancelled in a
 across the model), and the sea is stirred (energy 0.85, settling over 2.8 s). What the hero reveals behind its wordmark has no
 counterpart here.
 
-**Put something on it.** The CD is a disc with its hole; anything else becomes a card.
+**Pixel text** (`?model=text`). Jersey 25 set in dots, and it appears **word by word, pixel by pixel**: a word's pixels land at
+random (the hero's build curve, per word: bursts and a slow tail), the next word starts a beat after, until the text is complete.
+Jersey 25's grid is 41 pixels to the em, so it is rasterised 8× big at 328 px and each of its pixels read at the centre; a font pixel
+becomes a *block* of a whole number of cells (the biggest that fits `size`, or `?px=`), the sheet's edge snapped to a cell boundary,
+so every pixel is a square of the same cells and the dither never cuts one in two. Each pixel's own fill lets the dots inside it
+land one by one and flash as they do (the engine's pixel mode: `r` ink, `g` fill, `b` flash, read with NEAREST). The text is a
+flat sheet that faces you (turn it, it still works) with no thickness and no edge.
+
+| param | default | |
+|---|---|---|
+| `text` | `feeling\|nostalgic?` | `\|` or a new line starts a line; words are split on spaces |
+| `align` / `leading` | `center` / 1 | `left`; line spacing × 34 px |
+| `word` / `gap` | 1.1 / 0.3 | seconds a word takes to land, and between words |
+| `fill` / `flash` | 0.3 / 0.2 | seconds a pixel takes to fill in, and its flash lasts |
+| `order` | `random` | `ltr`: a word fills left to right, with scatter |
+| `loop` | 0 | seconds of rest before it all happens again (0: once) |
+| `px` | auto | cells per font pixel (auto: as many as fit `size` 0.8 of the screen) |
+
+The timing is live in `__lab.source.opts`; `__lab.text("hello|world")` sets other text; `B` replays.
+
+**Put a picture on it** (`?src=…` or the `picture` model: anything that is not the CD becomes a card of its own proportions).
 
 | how | what |
 |---|---|
@@ -425,7 +467,8 @@ counterpart here.
 | `__lab.load(urlOrFileOrSketch)` | any of those from the console |
 | `?shape=disc`, `?hole=0.2` | put a picture on a disc instead (it is inscribed in the disc's square), with a hole of that radius |
 
-Query parameters, also live in `__lab.P` (change one, it applies on the next frame; `cell` needs `__lab.resize()`):
+**Knobs.** Query parameters, also live in `__lab.P` (change one, it applies on the next frame; `cell` needs `__lab.resize()`). The
+defaults are the engine's (`GENERIC_PARAMS`, tuned on the CD); a model changes some (the CD spins, the text is flat).
 
 | param | default | |
 |---|---|---|
@@ -433,19 +476,20 @@ Query parameters, also live in `__lab.P` (change one, it applies on the next fra
 | `rx` / `ry` | 26 / -20 | the home pose: tilt back and turn sideways, degrees |
 | `size` / `fit` | 0.8 / `contain` | the plate's share of the screen at home (a disc's diameter, a card's longer side); `fit=cover` makes a card fill the screen |
 | `thick` / `shade` | 0.02 / 0.35 | the plate's thickness, × the disc's radius (0.02 is a real CD's: 1.2 mm on 60), and how much a slanted face darkens |
-| `dens` | 1.2 | share of lattice sites lit at full tone (the hero's letters: 0.72); above 1 the brightest tones saturate to a solid checkerboard |
+| `dens` | 1.2 | share of lattice sites lit at full tone (the hero's letters: 0.72, which the text uses); above 1 the brightest tones saturate to a solid checkerboard |
 | `black` / `white` / `gamma` | 0.3 / 0.9 / 1 | levels and curve applied to the luminance. The CD's body sits between 0.5 and 0.72, so it needs the stretch; a high-contrast picture wants `black=0&white=1` |
 | `lattice` | 1 | 0 prints free blue noise instead of the checkerboard (denser, more like a stipple) |
 | `field` | 1 | the ambient dots round the plate, 0 … 1 |
 | `color` | 0 | 0 paper-white dots (the hero); 1 each dot takes its source's hue |
 | `flicker` | 1 | depth of the picture's flicker, × the hero's |
-| `build` | 2.8 | seconds the dots take to land; 0 turns the build off |
+| `build` | 2.8 | seconds the dots take to land (pictures; the text has its own timing); 0 turns the build off |
 | `tex` | 1024 | the texture's side (a power of two) |
 
 `?dpr=` imitates another screen's pixel ratio. Debug: `__lab.pose(rx, ry)` sets the pose at once, `__lab.turn(dx, dy)` turns as a drag
-of that many px, `__lab.wave(x, y)` sends the wave, `__lab.step(ms)` advances the clock and draws (use it, with `performance.now`
-stubbed if you drive pointer events, in a preview whose pane is hidden: the browser runs no animation frames there), `__lab.shot()`
-returns the screen as a PNG data URL, `__lab.info()` the sizes, plate and source, `__lab.view` the pose.
+of that many px, `__lab.wave(x, y)` sends the wave, `__lab.model(id, arg)` switches model, `__lab.step(ms)` advances the clock and
+draws (use it, with `performance.now` stubbed if you drive pointer events, in a preview whose pane is hidden: the browser runs no
+animation frames there), `__lab.shot()` returns the screen as a PNG data URL, `__lab.info()` the sizes, plate, layout and source,
+`__lab.view` the pose, `__lab.source` the source on the plate.
 
 **The CD.** `tools/make-cd.py` makes `media/cd.png` from a picture of a CD held in a hand (not in the repo): it finds the hand,
 fits an ellipse to the rim and warps the disc to a true circle, makes the hub concentric with the rim (it sat 17 px off, which
