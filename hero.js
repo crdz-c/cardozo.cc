@@ -89,21 +89,6 @@ const TOUCH_LIFT = 24; // …and it sits this many CSS px above the finger
 // Frame time: the dots get one device px coarser (twice at most) if the frames stay slower than this on average.
 const ADAPT_MS = 26;
 const ADAPT_MAX = 2;
-// Zoom (wheel / trackpad pinch / two fingers; the cells themselves are magnified, so the pixels can be seen at work):
-const ZOOM_CELL_PX = 28; // at the limit one dot-cell is this many CSS px on the screen
-const ZOOM_OMEGA = 15; // the shown zoom follows its target on a critically damped spring of this ω (1/s): no jerk at the start of a gesture…
-const ZOOM_OMEGA_DIRECT = 48; // …and a stiffer one while fingers hold it (nearly 1:1)
-const RESET_BASE = 0.6; // s: the way back to 100 % is one glide, this long plus…
-const RESET_PER_LOG = 0.2; // …this per unit of log-zoom (a 28× zoom takes ~1.3 s, 1.5× takes ~0.7 s)
-const PAN_FRICTION = 4.5; // 1/s: a released drag keeps gliding, its speed dying away at this rate…
-const PAN_GLIDE_MIN = 70; // …when it was faster than this (CSS px/s); it stops under 8 px/s
-const ZOOM_WHEEL = 0.0018; // log-zoom per wheel pixel: scrolling "down" (deltaY > 0: on a Mac with natural scrolling, a swipe up) zooms in, the natural direction; make it negative to flip…
-const ZOOM_WHEEL_PINCH = 0.012; // …and per pixel of a trackpad pinch (a wheel with ctrlKey)
-const ZOOM_SOFT = 0.12; // rubber band past the zoom limit, in log units, while the wheel/fingers push; it settles back after…
-const ZOOM_IDLE_MS = 170; // …this long without input
-const ZOOM_SHOW = 1.04; // the reset button appears above this zoom
-const ZOOM_KEY = 0.4; // log-zoom per +/- key press
-const MOUSE_SLOP = 4; // CSS px a mouse must move, button down, to pan instead of click
 const BUILD_S = 8; // s: the whole build on a first visit (or ?boot)
 const BUILD_QUICK = 2.8; // s: the whole build for a returning visitor in this session
 const CURTAIN_FROM = 0.5; // the curtain works once the build is this far along
@@ -129,11 +114,7 @@ const state = {
   touchMode: false, // the latest pointer was a finger (the curtain grows and lifts, the mouse's ring and gradient go)
   nuc: 0, // the pointer ring's presence 0..1 (its dots light in at random, see the shader)
   tog: { amt: 0, from: 0, to: 0, t0: 0, dur: 0, hot: 0, hover: false, focus: false }, // the theme switch's icon: how lit, how hovered
-  zb: { amt: 0, from: 0, to: 0, t0: 0, dur: 0, hot: 0, hover: false, focus: false, want: false }, // the zoom reset's icon, the same
-  // the view (zoom): screen = scene × z + (tx, ty), in hero CSS px. `raw` is where the input wants the log-zoom, `lz` the shown
-  // one (it follows `raw`, eased, with a rubber band at the limit); (ax, ay) is a screen point held over the scene point (sx, sy)
-  view: { z: 1, lz: 0, raw: 0, tx: 0, ty: 0, ax: 0, ay: 0, sx: 0, sy: 0, last: -Infinity, hold: false, applied: 1, sign: 1, anim: null, lv: 0, fx: 0, fy: 0, mt: 0, mx: 0, my: 0 },
-  focusUI: null, // the on-screen button (theme or zoom reset) with keyboard focus: the compose pass underlines it
+  focusUI: null, // the on-screen button (the theme switch) with keyboard focus: the compose pass underlines it
   focusUIAmt: 0,
 };
 
@@ -293,15 +274,11 @@ function dissolveSvg() {
   });
 }
 
-// The wordmark's place in the scene (the unzoomed layout, which the shader lives in). The zoom is a CSS transform on .logo
-// (so the links stay under what is drawn), so divide it out; the wordmark is always at the hero's centre.
+// The wordmark's place in the scene (the wordmark is always at the hero's centre).
 function measureLogo() {
   const r = logoSvg.getBoundingClientRect();
   const h = hero.getBoundingClientRect();
-  const k = state.view.applied || 1;
-  const w = r.width / k;
-  const ht = r.height / k;
-  state.logoCss = [h.left + h.width / 2 - w / 2, h.top + h.height / 2 - ht / 2, w, ht];
+  state.logoCss = [h.left + h.width / 2 - r.width / 2, h.top + h.height / 2 - r.height / 2, r.width, r.height];
 }
 
 // pointer / keyboard on a letter-link. A click (or tap) always opens the link, whatever the letter shows.
@@ -327,7 +304,7 @@ links.forEach((a, i) => {
     if (!a.matches(":focus-visible")) return;
     held.add(i);
     morphTo(i, 1, performance.now());
-    state.focusRect = sceneRect(a.querySelector(".hit").getBoundingClientRect());
+    state.focusRect = a.querySelector(".hit").getBoundingClientRect();
     if (reduce) {
       state.focusAmt = 1;
       updateLetters(performance.now());
@@ -368,7 +345,6 @@ function stepTween(o, now) {
 }
 
 const themeBtn = hero.querySelector(".theme");
-const zoomBtn = hero.querySelector(".zoom-reset");
 
 // ------------------------------------------------------------------ theme
 // Dark (true black) and light (true white). The first paint already has the right one (index.html). Switching is the
@@ -453,7 +429,7 @@ themeBtn.addEventListener("pointerleave", (e) => {
 themeBtn.addEventListener("focus", () => {
   if (!themeBtn.matches(":focus-visible")) return;
   state.tog.focus = true;
-  state.focusUI = themeBtn; // (the compose pass underlines it, on the screen, whatever the zoom)
+  state.focusUI = themeBtn; // (the compose pass underlines it)
   if (reduce) {
     state.focusUIAmt = 1;
     state.tog.hot = 1;
@@ -1015,8 +991,7 @@ void main() {
     letter *= arr;
   }
 
-  // (the theme switch's and the zoom reset's icons are not part of the scene: they stay put on the screen, whatever the
-  // zoom, so the compose pass draws them)
+  // (the theme switch's icon is not part of the scene: the compose pass draws it)
   float ex = 0.0;
   float exTone = 1.0;
   float exFlash = 0.0;
@@ -1094,15 +1069,11 @@ uniform sampler2D uField;
 uniform sampler2D uBlue;
 uniform vec2  uCells;
 uniform float uCell;
-uniform float uZoom;      // the view's magnification: 1 shows the whole scene, more magnifies the cells themselves
-uniform vec2  uPan;       // device px: where the scene's origin lands on the screen (y up)
 uniform vec4  uTog;       // theme switch icon: centre x, y (screen cells), radius (cells), lit 0..1
-uniform vec4  uZb;        // zoom-reset icon: the same
-uniform vec2  uHot;       // how hovered / focused each is, 0..1
-uniform vec4  uUF;        // keyboard focus underline under one of them: centre x, y, radius (cells), amount
+uniform float uHot;       // how hovered / focused it is, 0..1
+uniform vec4  uUF;        // keyboard focus underline under it: centre x, y, radius (cells), amount
 uniform vec3  uThemeT;    // the theme change: from, to (0 dark … 1 light), progress
 uniform vec3  uThemeO;    // …where it spreads from on the screen: x, y (device px), the farthest corner's distance
-uniform float uHalo;      // 0..1: a one-cell ground-coloured outline round the icons (they sit over magnified pixels)
 uniform float uTime;
 
 #define BG_D vec3(0.0)
@@ -1143,23 +1114,14 @@ float sunSd(vec2 tp, float R) { // a small disc and eight short rays
   float ray = min(1.15 - abs(sin(ak)) * d, min(d - 0.6 * R, R - d));
   return max(0.4 * R - d, ray);
 }
-float frameSd(vec2 tp, float R) { // four corner brackets round a centre pixel: "fit to the screen"
-  vec2 q = abs(tp);
-  float m = 0.92 * R;
-  float e = max(q.x, q.y);
-  float brk = min(min(e - (m - 3.2), m - e), min(q.x, q.y) - (m - 0.62 * R));
-  return max(brk, 2.2 - e);
-}
 
-// the on-screen icons at this screen cell: rgb and alpha (0 = show the zoomed scene)
+// the on-screen icon at this screen cell: rgb and alpha (0 = show the field)
 vec4 uiAt(vec2 cell) {
   vec2 c = cell + 0.5;
   float rT = uTog.z + 3.0;
-  float rZ = uZb.z + 3.0;
   bool nearT = uTog.w > 0.002 && max(abs(c.x - uTog.x), abs(c.y - uTog.y)) < rT;
-  bool nearZ = uZb.w > 0.002 && max(abs(c.x - uZb.x), abs(c.y - uZb.y)) < rZ;
   bool nearF = uUF.w > 0.01 && abs(c.y - (uUF.y - uUF.z - 4.0)) < 1.0 && abs(c.x - uUF.x) < uUF.z;
-  if (!nearT && !nearZ && !nearF) return vec4(0.0);
+  if (!nearT && !nearF) return vec4(0.0);
 
   // which palette this cell is in: the theme change spreading out from the switch, as in the scene
   float thT = hash12(cell + vec2(17.0, 43.0));
@@ -1169,31 +1131,9 @@ vec4 uiAt(vec2 cell) {
   float th2 = blue(cell + vec2(29.0, 13.0));
   float moonNow = 1.0 - step(0.5, flip); // a moon in the dark theme, a sun in the light one
 
-  // distance to each icon here, and (for the outline) whether any of the eight cells round it is inside one
-  float sdT = -1000.0;
-  float sdZ = -1000.0;
-  float ring = 0.0;
-  for (int j = -1; j <= 1; j++) {
-    for (int i = -1; i <= 1; i++) {
-      vec2 cc = c + vec2(float(i), float(j));
-      float st = -1000.0;
-      float sz = -1000.0;
-      if (nearT) st = mix(sunSd(cc - uTog.xy, uTog.z), moonSd(cc - uTog.xy, uTog.z), moonNow);
-      if (nearZ) sz = frameSd(cc - uZb.xy, uZb.z);
-      if (i == 0 && j == 0) {
-        sdT = st;
-        sdZ = sz;
-      }
-      ring = max(ring, max(step(0.0, st) * step(0.002, uTog.w), step(0.0, sz) * step(0.002, uZb.w)));
-    }
-  }
-  float covT = smoothstep(-ICON_EDGE, ICON_EDGE, sdT) * step(0.002, uTog.w);
-  float covZ = smoothstep(-ICON_EDGE, ICON_EDGE, sdZ) * step(0.002, uZb.w);
-  float cov = max(covT, covZ);
-  bool isT = covT >= covZ;
-  float amt = isT ? uTog.w : uZb.w;
-  float hot = isT ? uHot.x : uHot.y;
-  float arrive = smoothstep(th2 - LIGHT_SOFT, th2 + LIGHT_SOFT, amt * LIGHT_OVER - LIGHT_SOFT); // each dot lights at its own moment
+  float sdT = nearT ? mix(sunSd(c - uTog.xy, uTog.z), moonSd(c - uTog.xy, uTog.z), moonNow) : -1000.0;
+  float cov = smoothstep(-ICON_EDGE, ICON_EDGE, sdT) * step(0.002, uTog.w);
+  float arrive = smoothstep(th2 - LIGHT_SOFT, th2 + LIGHT_SOFT, uTog.w * LIGHT_OVER - LIGHT_SOFT); // each dot lights at its own moment
 
   // the same material as the letters: dots on the checkerboard lattice in the dark theme, solid ink in the light one, the
   // edge a ramp of density the dots dither across, each dot twinkling and flickering at its own pace
@@ -1209,7 +1149,7 @@ vec4 uiAt(vec2 cell) {
   fk = fk * fk * (3.0 - 2.0 * fk);
   float fi = floor(fr);
   float flick = mix(hash12(cell + vec2(fi * 17.3, 5.0)), hash12(cell + vec2((fi + 1.0) * 17.3, 5.0)), fk);
-  float tone = TONE_L * (1.0 - 0.35 * TWINKLE * tw) * (1.0 - mix(FLICK_L, FLICK_L_INK, flip) * (1.0 - sqrt(flick))) * mix(0.8, 1.0, hot);
+  float tone = TONE_L * (1.0 - 0.35 * TWINKLE * tw) * (1.0 - mix(FLICK_L, FLICK_L_INK, flip) * (1.0 - sqrt(flick))) * mix(0.8, 1.0, uHot);
 
   // keyboard focus: a dotted underline under the focused icon
   if (nearF && mod(cell.x + cell.y, 2.0) < 0.5 && blue(cell) < uUF.w) {
@@ -1219,20 +1159,16 @@ vec4 uiAt(vec2 cell) {
   vec3 ground = mix(BG_D, BG_L, flip);
   vec3 ink = mix(mix(BG_D, FG_D, on * tone), mix(BG_L, FG_L, on * tone), flip);
   if (on > 0.002) return vec4(ink, 1.0);
-  // an icon's body has its own ground behind its dots (as a letter has: the scene's pixels do not show through its holes)
-  float body = step(0.5, cov);
-  return vec4(ground, max(body, uHalo * ring));
+  // the icon's body has its own ground behind its dots (as a letter has: the field does not show through its holes)
+  return vec4(ground, step(0.5, cov));
 }
 
 void main() {
-  vec2 frag = floor(gl_FragCoord.xy);
-  // where this device pixel sits in the scene (device px of the unzoomed field), and the field's cell there: every cell is
-  // magnified as a whole (nearest), so at a high zoom each one is a plain square of its own colour
-  vec2 p = (frag + 0.5 - uPan) / uZoom;
-  vec2 cs = clamp(floor(p / uCell), vec2(0.0), uCells - 1.0);
-  vec3 col = texture2D(uField, (cs + 0.5) / uCells).rgb;
-  // the icons live on the screen's own cell grid, not the scene's
-  vec4 ui = uiAt(floor(frag / uCell));
+  // every device pixel shows the field's cell under it (nearest: each cell is a plain square of its own colour), and the theme
+  // switch's icon is drawn over it on the same grid
+  vec2 cell = floor(floor(gl_FragCoord.xy) / uCell);
+  vec3 col = texture2D(uField, (clamp(cell, vec2(0.0), uCells - 1.0) + 0.5) / uCells).rgb;
+  vec4 ui = uiAt(cell);
   gl_FragColor = vec4(mix(col, ui.rgb, ui.a), 1.0);
 }
 `;
@@ -1301,7 +1237,7 @@ function createScene() {
 
   const locs = (p, names) => Object.fromEntries(names.map((n) => [n, gl.getUniformLocation(p, n)]));
   const UF = locs(field, ["uDev", "uE", "uEV", "uER", "uW[0]", "uTime", "uBlue", "uCells", "uCell", "uIntro", "uLogo", "uTexScale", "uTexOff", "uTexPerCell", "uLet[0]", "uBrand", "uRev", "uRep", "uN", "uLink", "uPulse", "uSea", "uEnergy", "uFocus", "uFocusAmt", "uMask", "uThemeT", "uThemeO"]);
-  const UC = locs(compose, ["uField", "uBlue", "uCells", "uCell", "uZoom", "uPan", "uTog", "uZb", "uHot", "uUF", "uThemeT", "uThemeO", "uHalo", "uTime"]);
+  const UC = locs(compose, ["uField", "uBlue", "uCells", "uCell", "uTog", "uHot", "uUF", "uThemeT", "uThemeO", "uTime"]);
 
   gl.useProgram(field);
   gl.uniform1i(UF.uMask, 0);
@@ -1365,8 +1301,8 @@ function createScene() {
     const e = state.e;
     const [ex, ey] = toDev(e.x + hr.left, e.y + hr.top);
     gl.uniform2f(U.uDev, dev[0], dev[1]);
-    // (a finger needs no ring or gradient under it, and a zoomed view gets the system cursor instead: a grab hand)
-    gl.uniform3f(U.uE, ex, ey, e.str * (1 - state.cur.tk) * (1 - clamp01((state.view.z - 1) / 0.6)));
+    // (a finger needs no ring or gradient under it)
+    gl.uniform3f(U.uE, ex, ey, e.str * (1 - state.cur.tk));
     // speed-dependent terms see at most MAX_SPEED, so a flick can never smear the field
     const sp = Math.hypot(e.vx, e.vy);
     const k = sp > MAX_SPEED ? MAX_SPEED / sp : 1;
@@ -1390,14 +1326,9 @@ function createScene() {
       waveData.set([wx, wy, w ? age : -1, w ? (1 - clamp01(age / WAVE_LIFE)) * clamp01(age / 0.2) * (w.k ?? 1) : 0], i * 4);
     }
 
-    // the view: the scene is magnified by z and shifted, in the compose pass; the buttons stay where they are on the screen
-    const view = state.view;
-    const panX = Math.round(view.tx * dpr); // (whole device px: the cells' edges are crisp)
-    const panY = Math.round(dpr * (hr.height * (1 - view.z) - view.ty));
+    // the theme switch (drawn by the compose pass, over the field)
     const tr = themeBtn.getBoundingClientRect();
     const [tgx, tgy] = toDev(tr.left + tr.width / 2, tr.top + tr.height / 2);
-    const sox = (tgx - panX) / view.z; // (the same point, in the scene)
-    const soy = (tgy - panY) / view.z;
 
     const [l, t, w, h] = state.logoCss;
     const [lx, ly] = toDev(l, t + h);
@@ -1419,7 +1350,7 @@ function createScene() {
     gl.uniform1f(UF.uRep, cu.rep);
     const e = state.e;
     const [nx, ny] = toDev(e.tx + hr.left, e.ty + hr.top);
-    gl.uniform4f(UF.uN, nx, ny, reduce ? 0 : state.nuc * (1 - cu.tk) * (1 - clamp01((state.view.z - 1) / 0.6)), NUCLEUS_R * dpr * (1 + 0.25 * state.linkAmt));
+    gl.uniform4f(UF.uN, nx, ny, reduce ? 0 : state.nuc * (1 - cu.tk), NUCLEUS_R * dpr * (1 + 0.25 * state.linkAmt));
     gl.uniform1f(UF.uPulse, state.pulse);
     const [sx, sy] = toDev(state.stir[0] + hr.left, state.stir[1] + hr.top);
     gl.uniform3f(UF.uSea, reduce ? 0 : 1, sx, sy);
@@ -1427,9 +1358,9 @@ function createScene() {
     gl.uniform4fv(UF.uFocus, state.focusRect ? rectDev(state.focusRect) : [0, 0, 0, 0]);
     gl.uniform1f(UF.uFocusAmt, state.focusAmt);
 
-    // the theme change spreads out from the switch: its origin, in the scene's own device px (the scene is what is zoomed)
+    // the theme change spreads out from the switch: its origin, in device px
     gl.uniform3f(UF.uThemeT, theme.from, theme.to, theme.p);
-    gl.uniform3f(UF.uThemeO, sox, soy, Math.hypot(Math.max(sox, dev[0] - sox), Math.max(soy, dev[1] - soy)));
+    gl.uniform3f(UF.uThemeO, tgx, tgy, Math.hypot(Math.max(tgx, dev[0] - tgx), Math.max(tgy, dev[1] - tgy)));
     gl.drawArrays(gl.TRIANGLES, 0, 3);
 
     // pass 2: compose at device pixels
@@ -1438,19 +1369,13 @@ function createScene() {
     gl.useProgram(compose);
     gl.uniform2f(UC.uCells, cells[0], cells[1]);
     gl.uniform1f(UC.uCell, CELL);
-    gl.uniform1f(UC.uZoom, view.z);
-    gl.uniform2f(UC.uPan, panX, panY);
-    const zr = zoomBtn.getBoundingClientRect();
-    const [zgx, zgy] = toDev(zr.left + zr.width / 2, zr.top + zr.height / 2);
     gl.uniform4f(UC.uTog, tgx / CELL, tgy / CELL, (ICON_R * dpr) / CELL, state.tog.amt);
-    gl.uniform4f(UC.uZb, zgx / CELL, zgy / CELL, (ICON_R * dpr) / CELL, state.zb.amt);
-    gl.uniform2f(UC.uHot, state.tog.hot, state.zb.hot);
+    gl.uniform1f(UC.uHot, state.tog.hot);
     const fu = state.focusUI?.getBoundingClientRect();
     const [fgx, fgy] = fu ? toDev(fu.left + fu.width / 2, fu.top + fu.height / 2) : [0, 0];
     gl.uniform4f(UC.uUF, fgx / CELL, fgy / CELL, (ICON_R * dpr) / CELL, fu ? state.focusUIAmt : 0);
     gl.uniform3f(UC.uThemeT, theme.from, theme.to, theme.p);
     gl.uniform3f(UC.uThemeO, tgx, tgy, Math.hypot(Math.max(tgx, dev[0] - tgx), Math.max(tgy, dev[1] - tgy)));
-    gl.uniform1f(UC.uHalo, clamp01((view.z - 1) / 0.4));
     gl.uniform1f(UC.uTime, state.time);
     gl.drawArrays(gl.TRIANGLES, 0, 3);
   }
@@ -1497,13 +1422,11 @@ function createScene() {
     return true;
   }
 
-  // the most the view can zoom: one cell as ZOOM_CELL_PX CSS px on the screen; and the cell, for settling on whole device px
-  const zoomMax = () => Math.max(1, (ZOOM_CELL_PX * dpr) / CELL);
   const cellPx = () => CELL;
   // debug: the composed screen as a data URL (drawn, then read in the same task, before the browser presents it)
   const shot = () => (draw(), canvas.toDataURL("image/png"));
 
-  return { draw, rectDev, cropCells, coarser, zoomMax, cellPx, shot, dpr, quality: () => quality, finish: () => gl.finish() };
+  return { draw, rectDev, cropCells, coarser, cellPx, shot, dpr, quality: () => quality, finish: () => gl.finish() };
 }
 
 // One semi-implicit step of a damped spring: o[k] moves toward target, o[v] is its velocity. [ω, ζ]: ζ = 1 is
@@ -1522,24 +1445,17 @@ function spring(o, k, v, target, [w, z], dt) {
 }
 
 // ------------------------------------------------------------------ pointer, clicks
-// client px → the scene (hero CSS px in the unzoomed layout: where the pointer, the waves and the curtain live)
-function toScene(cx, cy) {
-  const r = hero.getBoundingClientRect();
-  return [(cx - r.left - state.view.tx) / state.view.z, (cy - r.top - state.view.ty) / state.view.z];
-}
-// a client rect (e.g. a link's hit box, which the zoom transforms) → the same rect in the scene, as client-style coordinates
-function sceneRect(r) {
-  const h = hero.getBoundingClientRect();
-  const [l, t] = toScene(r.left, r.top);
-  const [rr, b] = toScene(r.right, r.bottom);
-  return { left: h.left + l, top: h.top + t, right: h.left + rr, bottom: h.top + b };
-}
+// The screen is fixed: nothing scrolls, pans or zooms (style.css: no overflow, touch-action: none). What the visitor does
+// with it is hover and touch, and the page answers in place. A trackpad pinch (ctrl+wheel) and Safari's pinch gesture would
+// zoom the page, so they are ignored; the wheel does nothing else, as there is nothing to scroll.
+window.addEventListener("wheel", (e) => scene && !reduce && e.ctrlKey && e.preventDefault(), { passive: false });
+["gesturestart", "gesturechange", "gestureend"].forEach((t) => document.addEventListener(t, (e) => scene && !reduce && e.preventDefault()));
 
 function setTarget(e) {
-  const [x, y] = toScene(e.clientX, e.clientY);
+  const r = hero.getBoundingClientRect();
   const st = state.e;
-  st.tx = x;
-  st.ty = y;
+  st.tx = e.clientX - r.left;
+  st.ty = e.clientY - r.top;
   if (!st.on) {
     // the pointer's dot appears where the pointer is, without sweeping in from far away
     st.x = st.tx;
@@ -1550,7 +1466,7 @@ function setTarget(e) {
   state.lastInput = performance.now();
 }
 
-// the wave: two pulses from (x, y), in the scene; the second leaves a moment after the first (its t0 is in the future
+// the wave: two pulses from (x, y) in hero CSS px; the second leaves a moment after the first (its t0 is in the future
 // until then: the shader skips it)
 function spawnWave(x, y) {
   if (!scene || reduce) return;
@@ -1560,249 +1476,18 @@ function spawnWave(x, y) {
   while (state.waves.length > MAX_WAVES) state.waves.shift();
 }
 
-// ------------------------------------------------------------------ zoom
-// Wheel (a trackpad's pinch comes as ctrl+wheel), two fingers, or the + / − keys zoom the view, anchored where the cursor or
-// the fingers are. What is magnified is the field's own cells, so at the limit every dot is a plain square (about ZOOM_CELL_PX
-// CSS px wide) and its behaviour can be watched. Dragging pans a zoomed view (mouse; one finger). The shown zoom follows its
-// target eased, with a rubber band past the limit; at rest it settles onto a zoom that makes every cell a whole number of
-// device px and the cell edges land on device px. The compose pass draws the zoom; the .logo SVG (the real links) gets the same
-// transform in CSS, so a click lands on what is drawn. A button (drawn in pixels, sticky at the right) goes back to 100 %.
-const view = state.view;
-const logoEl = hero.querySelector(".logo");
-const zoomOn = () => !!scene && !reduce;
-const heroBox = () => hero.getBoundingClientRect();
-const lzMax = () => Math.log(scene ? scene.zoomMax() : 1);
-const rubber = (x, hi) => (x > hi ? hi + ZOOM_SOFT * (1 - Math.exp(-(x - hi) / ZOOM_SOFT)) : x);
-// hold the screen point (cx, cy) over the scene point that is under it now (and keep holding it as the zoom changes)
-function viewAnchor(cx, cy) {
-  const r = heroBox();
-  view.ax = cx - r.left;
-  view.ay = cy - r.top;
-  view.sx = (view.ax - view.tx) / view.z;
-  view.sy = (view.ay - view.ty) / view.z;
-}
-// move the held screen point; the scene point under it stays (a pan)
-function viewMoveAnchor(cx, cy) {
-  const r = heroBox();
-  const x = cx - r.left;
-  const y = cy - r.top;
-  const now = performance.now();
-  const dt = (now - view.mt) / 1000;
-  if (dt > 0.001 && dt < 0.12) {
-    // the speed of the held point, smoothed: a released drag glides on at it
-    view.fx = 0.7 * view.fx + 0.3 * ((x - view.mx) / dt);
-    view.fy = 0.7 * view.fy + 0.3 * ((y - view.my) / dt);
-  } else view.fx = view.fy = 0;
-  view.mt = now;
-  view.mx = x;
-  view.my = y;
-  view.ax = x;
-  view.ay = y;
-}
-function zoomBy(dlog, cx, cy) {
-  cancelAnim();
-  viewAnchor(cx, cy);
-  if (dlog) view.sign = Math.sign(dlog);
-  view.raw = clamp(view.raw + dlog, 0, lzMax() + 4 * ZOOM_SOFT);
-  view.last = performance.now();
-}
-// back to 100 %: one glide in which the zoom runs out (eased in and out, in log space) while the scene point at the middle of the
-// screen flies to the scene's own centre, so it arrives at 100 % without a lurch (a plain spring on the zoom alone drifted the
-// view sideways when the scene's edge caught it)
-function resetZoom() {
-  if (view.lz < 1e-3 && !view.tx && !view.ty) return;
-  const r = heroBox();
-  view.hold = false;
-  view.fx = view.fy = 0;
-  view.anim = {
-    t0: performance.now(),
-    dur: (RESET_BASE + RESET_PER_LOG * view.lz) * 1000,
-    lz0: view.lz,
-    sx0: (r.width / 2 - view.tx) / view.z,
-    sy0: (r.height / 2 - view.ty) / view.z,
-  };
-}
-// input of the user's takes over from a running glide, from wherever it is
-function cancelAnim() {
-  if (!view.anim) return;
-  view.anim = null;
-  view.raw = view.lz;
-  view.lv = 0;
-}
-function startPan(cx, cy) {
-  cancelAnim();
-  viewAnchor(cx, cy);
-  const r = heroBox();
-  view.mt = performance.now();
-  view.mx = cx - r.left;
-  view.my = cy - r.top;
-  view.fx = view.fy = 0;
-  view.hold = true;
-  html.classList.add("panning");
-}
-function endPan() {
-  view.hold = false;
-  view.last = performance.now();
-  html.classList.remove("panning");
-  // let go while moving: it glides on (a stopped finger leaves no speed)
-  if (performance.now() - view.mt > 90 || Math.hypot(view.fx, view.fy) < PAN_GLIDE_MIN) view.fx = view.fy = 0;
-}
-
-function applyView() {
-  const r = heroBox();
-  const rest = view.z === 1 && view.tx === 0 && view.ty === 0;
-  const css = rest ? "" : `translate(${((view.z - 1) * r.width) / 2 + view.tx}px, ${((view.z - 1) * r.height) / 2 + view.ty}px) scale(${view.z}) translate(-50%, -50%)`;
-  if (css !== view.css) {
-    logoEl.style.transform = css;
-    view.css = css;
-  }
-  view.applied = rest ? 1 : view.z;
-  html.classList.toggle("zoomed", view.z > 1.02);
-  const want = view.z > ZOOM_SHOW;
-  if (want !== state.zb.want) {
-    state.zb.want = want;
-    tweenTo(state.zb, want ? 1 : 0, want ? ICON_IN_MS : 300, performance.now());
-  }
-}
-
-function stepView(now, dt) {
-  if (!scene) return; // (no WebGL, no zoom)
-  const v = view;
-  const r = heroBox();
-  const hi = lzMax();
-  const gliding = !v.hold && (v.fx !== 0 || v.fy !== 0);
-  const flying = !!v.anim;
-  if (flying) {
-    const a = v.anim;
-    const u = clamp01((now - a.t0) / a.dur);
-    const e = u * u * u * (u * (u * 6 - 15) + 10); // smootherstep: no jerk at either end
-    v.lz = a.lz0 * (1 - e);
-    v.lv = 0;
-    v.raw = v.lz;
-    v.sx = a.sx0 + (r.width / 2 - a.sx0) * e;
-    v.sy = a.sy0 + (r.height / 2 - a.sy0) * e;
-    v.ax = r.width / 2;
-    v.ay = r.height / 2;
-    if (u >= 1) {
-      v.anim = null;
-      v.raw = v.lz = 0;
-      v.last = now; // (it settles from here)
-    }
-  }
-  const live = flying || v.hold || gliding || now - v.last < ZOOM_IDLE_MS;
-  if (!live) {
-    // settled: inside the limits, and at a zoom that makes every cell a whole number of device px. It goes the way the gesture
-    // was going (in when zooming in, out when zooming out), so even a small gesture lands on the next step instead of
-    // snapping back to where it started; the spring below makes it a glide, not a jump.
-    const cell = scene ? scene.cellPx() : 1;
-    const k = cell * Math.exp(clamp(v.raw, 0, hi));
-    const whole = v.sign >= 0 ? Math.ceil(k - 0.04) : Math.floor(k + 0.04);
-    v.raw = Math.log(Math.min(Math.exp(hi), Math.max(1, whole / cell)));
-  }
-  const target = live ? rubber(clamp(v.raw, 0, hi + 4 * ZOOM_SOFT), hi) : v.raw;
-  if (!flying) spring(v, "lz", "lv", target, [v.hold ? ZOOM_OMEGA_DIRECT : ZOOM_OMEGA, 1], dt);
-  if (Math.abs(target - v.lz) < 5e-4 && Math.abs(v.lv) < 2e-3) {
-    v.lz = target;
-    v.lv = 0;
-  }
-  v.lz = Math.max(0, v.lz); // (the spring may not take it under 100 %: there is nothing outside the scene)
-  v.z = Math.exp(v.lz);
-  if (gliding) {
-    // a released drag keeps gliding, slowing down
-    v.ax += v.fx * dt;
-    v.ay += v.fy * dt;
-    const f = Math.exp(-dt * PAN_FRICTION);
-    v.fx *= f;
-    v.fy *= f;
-    if (Math.hypot(v.fx, v.fy) < 8) v.fx = v.fy = 0;
-  }
-  // the translation that holds the anchor, kept inside the scene (so the view never shows past its edge)
-  const bx = r.width * (1 - v.z);
-  const by = r.height * (1 - v.z);
-  let tx = v.ax - v.sx * v.z;
-  let ty = v.ay - v.sy * v.z;
-  if (gliding && (tx < bx || tx > 0)) v.fx = 0; // (it stops at the edge)
-  if (gliding && (ty < by || ty > 0)) v.fy = 0;
-  tx = clamp(tx, bx, 0);
-  ty = clamp(ty, by, 0);
-  if (!live && v.lz === target) {
-    // at rest the cell edges land on whole device px
-    const dpr = scene.dpr;
-    tx = Math.round(tx * dpr) / dpr;
-    ty = Math.round(ty * dpr) / dpr;
-  }
-  v.tx = tx;
-  v.ty = ty;
-  v.ax = tx + v.sx * v.z; // (bounds may have moved it: stay on what is shown)
-  v.ay = ty + v.sy * v.z;
-  applyView();
-}
-
-window.addEventListener(
-  "wheel",
-  (e) => {
-    if (!zoomOn()) return;
-    e.preventDefault();
-    const dy = e.deltaY * (e.deltaMode === 1 ? 16 : e.deltaMode === 2 ? 400 : 1);
-    // a pinch (ctrl+wheel: deltaY < 0 when the fingers spread) zooms in as the fingers spread; plain scrolling follows the natural direction
-    zoomBy(e.ctrlKey ? -dy * ZOOM_WHEEL_PINCH : dy * ZOOM_WHEEL, e.clientX, e.clientY);
-  },
-  { passive: false }
-);
-window.addEventListener("keydown", (e) => {
-  if (!zoomOn() || e.metaKey || e.ctrlKey || e.altKey) return;
-  const r = heroBox();
-  const cx = r.left + r.width / 2;
-  const cy = r.top + r.height / 2;
-  if (e.key === "+" || e.key === "=") zoomBy(ZOOM_KEY, cx, cy);
-  else if (e.key === "-" || e.key === "_") zoomBy(-ZOOM_KEY, cx, cy);
-  else if (e.key === "0") resetZoom();
-  else return;
-  e.preventDefault();
-});
-// Safari reports a pinch as its own gesture and would zoom the page with it: the view zooms instead
-["gesturestart", "gesturechange", "gestureend"].forEach((t) => document.addEventListener(t, (e) => zoomOn() && e.preventDefault()));
-// the reset button (the pixels are drawn by the compose pass; this is its hit target, focus and label)
-zoomBtn.addEventListener("click", () => resetZoom());
-zoomBtn.addEventListener("pointerenter", (e) => {
-  if (e.pointerType === "touch") return;
-  state.link = true;
-  state.zb.hover = true;
-});
-zoomBtn.addEventListener("pointerleave", (e) => {
-  if (e.pointerType === "touch") return;
-  state.link = false;
-  state.zb.hover = false;
-});
-zoomBtn.addEventListener("focus", () => {
-  if (!zoomBtn.matches(":focus-visible")) return;
-  state.zb.focus = true;
-  state.focusUI = zoomBtn;
-});
-zoomBtn.addEventListener("blur", () => {
-  state.zb.focus = false;
-  if (state.focusUI === zoomBtn) state.focusUI = null;
-});
-
 // ------------------------------------------------------------------ touch
 // A finger has no hover, so on touch the gestures differ (the layout does not):
 //   tap on the wordmark         → every letter melts into its mark and stays (the cycle waits); a tap on a revealed mark
 //                                 (then the click) opens its link, so a link is never opened before it was seen
 //   tap anywhere else           → hides the marks if they are shown; otherwise sends the wave
-//   press and hold              → the curtain comes to the finger (bigger and a little above it, so the finger does not
-//                                 cover it) and follows it; letting go closes it. A hold never opens a link.
-//   drag                        → at 100 % the same curtain; zoomed in, it pans the view (one finger)
-//   two fingers                 → pinch: zoom, anchored between them (and pan with them)
-// Marks left shown hide by themselves after REVEAL_HIDE_MS, and when the page is left. Mouse, pen and keyboard keep what
-// they had (a mouse drags to pan a zoomed view); with reduced motion or no WebGL a tap simply opens the link.
+//   press and hold, or drag     → the curtain comes to the finger (bigger and a little above it, so the finger does not
+//                                 cover it) and follows it; letting go closes it. A hold or a drag never opens a link.
+// Marks left shown hide by themselves after REVEAL_HIDE_MS, and when the page is left. Mouse, pen and keyboard keep
+// what they had; with reduced motion or no WebGL a tap simply opens the link.
 let lastType = "mouse"; // the latest pointerdown's type
 let tapQuick = false; // the latest touch ended as a tap (short and still): only then may the click that follows act
-let touch = null; // the one-finger gesture in progress: { id, t0, x0, y0, x, y, moved, held, pan, onLink }
-const fingers = new Map(); // touch pointers down: id → { x, y }
-let pinch = null; // two fingers down: { d0, raw0 }
-let ignoreUntilUp = false; // after a pinch the fingers left are not a tap
-let drag = null; // a mouse button down while zoomed: { x0, y0, moved, link }
-let dragged = false; // a mouse drag just ended: the click that follows is not a click
+let touch = null; // the gesture in progress: { id, t0, x0, y0, x, y, moved, held, onLink }
 let revealT0 = 0;
 function revealMarks(now = performance.now()) {
   if (revealAll) return;
@@ -1826,46 +1511,24 @@ function touchDown(e) {
   state.lastInput = now; // the choreography waits while a finger is down
   if (revealAll) revealT0 = now;
   tapQuick = false;
-  touch = { id: e.pointerId, t0: now, x0: e.clientX, y0: e.clientY, x: e.clientX, y: e.clientY, moved: false, held: false, pan: false, onLink: !!e.target.closest?.("a, button") };
+  touch = { id: e.pointerId, t0: now, x0: e.clientX, y0: e.clientY, x: e.clientX, y: e.clientY, moved: false, held: false, onLink: !!e.target.closest?.("a, button") };
 }
 function touchEnd(e) {
   const g = touch;
   touch = null;
   state.e.on = false;
   if (!g) return;
-  if (g.pan) endPan();
-  const quick = e.type === "pointerup" && !g.held && !g.moved && performance.now() - g.t0 < HOLD_MS && !ignoreUntilUp;
+  const quick = e.type === "pointerup" && !g.held && !g.moved && performance.now() - g.t0 < HOLD_MS;
   tapQuick = quick;
   if (!quick || g.onLink) return; // (on a letter, the click that follows decides: reveal, or open)
   if (revealAll) hideMarks();
   else {
-    const [x, y] = toScene(g.x0, g.y0);
-    spawnWave(x, y);
+    const r = hero.getBoundingClientRect();
+    spawnWave(g.x0 - r.left, g.y0 - r.top);
   }
-}
-function pinchStart() {
-  cancelAnim();
-  const [a, b] = [...fingers.values()];
-  pinch = { d0: Math.max(1, Math.hypot(a.x - b.x, a.y - b.y)), raw0: view.raw };
-  if (touch?.pan) html.classList.remove("panning");
-  touch = null;
-  state.e.on = false;
-  tapQuick = false;
-  ignoreUntilUp = true;
-  viewAnchor((a.x + b.x) / 2, (a.y + b.y) / 2);
-  view.hold = true;
-}
-function pinchMove() {
-  const [a, b] = [...fingers.values()];
-  const d = Math.max(1, Math.hypot(a.x - b.x, a.y - b.y));
-  const raw = clamp(pinch.raw0 + Math.log(d / pinch.d0), 0, lzMax() + 4 * ZOOM_SOFT);
-  if (raw !== view.raw) view.sign = Math.sign(raw - view.raw);
-  view.raw = raw;
-  viewMoveAnchor((a.x + b.x) / 2, (a.y + b.y) / 2);
 }
 links.forEach((a) => {
   a.addEventListener("click", (e) => {
-    if (dragged) return e.preventDefault(); // the end of a mouse drag is not a click
     if (lastType !== "touch" || e.detail === 0 || !scene || reduce) return; // mouse, keyboard, fallbacks: a plain link
     if (!tapQuick) return e.preventDefault(); // a hold or a drag never opens a link
     if (!revealAll) {
@@ -1882,38 +1545,20 @@ window.addEventListener(
   "pointermove",
   (e) => {
     if (e.pointerType === "touch") {
-      if (!zoomOn()) {
-        if (e.buttons !== 0) setTarget(e);
+      if (!touch) {
+        if (e.buttons !== 0 && (!scene || reduce)) setTarget(e);
         return;
       }
-      const f = fingers.get(e.pointerId);
-      if (f) {
-        f.x = e.clientX;
-        f.y = e.clientY;
-      }
-      if (pinch) return pinchMove();
-      if (!touch || ignoreUntilUp || e.pointerId !== touch.id) return;
       touch.x = e.clientX;
       touch.y = e.clientY;
       if (!touch.moved && Math.hypot(touch.x - touch.x0, touch.y - touch.y0) > TOUCH_SLOP) {
         touch.moved = true;
-        if (view.z > 1.02) {
-          touch.pan = true; // zoomed in, a dragging finger pans the view
-          startPan(touch.x, touch.y);
-        } else touchHold(); // at 100 % it brings the curtain
+        touchHold();
       }
-      if (touch.pan) viewMoveAnchor(touch.x, touch.y);
-      else if (touch.held) setTarget(e);
+      if (touch.held) setTarget(e);
       return;
     }
     state.touchMode = false;
-    if (drag && e.buttons & 1) {
-      if (!drag.moved && Math.hypot(e.clientX - drag.x0, e.clientY - drag.y0) > MOUSE_SLOP) {
-        drag.moved = true;
-        startPan(e.clientX, e.clientY);
-      }
-      if (drag.moved) viewMoveAnchor(e.clientX, e.clientY);
-    }
     setTarget(e);
   },
   { passive: true }
@@ -1922,65 +1567,20 @@ window.addEventListener(
   "pointerdown",
   (e) => {
     lastType = e.pointerType;
-    if (e.pointerType === "touch" && zoomOn()) {
-      fingers.set(e.pointerId, { x: e.clientX, y: e.clientY });
-      if (fingers.size === 2) pinchStart();
-      else if (fingers.size === 1) touchDown(e);
-      return;
-    }
     if (e.pointerType !== "touch") state.touchMode = false;
-    // a mouse button down on a zoomed view may start a pan: then the wave waits for the release (and only if it was a click)
-    if (e.pointerType !== "touch" && zoomOn() && view.z > 1.02 && e.button === 0) drag = { x0: e.clientX, y0: e.clientY, moved: false, link: !!e.target.closest?.("a, button") };
+    if (e.pointerType === "touch" && scene && !reduce) return touchDown(e);
     setTarget(e);
-    if (!scene || drag) return;
+    if (!scene) return;
     // a click on a letter is its link (the browser follows it); anywhere else sends a wave across the screen
     if (reduce || e.target.closest?.("a, button")) return;
-    const [x, y] = toScene(e.clientX, e.clientY);
-    spawnWave(x, y);
+    const r = hero.getBoundingClientRect();
+    spawnWave(e.clientX - r.left, e.clientY - r.top);
   },
   { passive: true }
 );
 const pointerOff = (e) => {
-  if (e.type === "pointerleave") {
-    state.e.on = false;
-    return;
-  }
-  if (e.pointerType === "touch") {
-    if (!zoomOn()) {
-      state.e.on = false;
-      return;
-    }
-    fingers.delete(e.pointerId);
-    if (pinch && fingers.size < 2) {
-      pinch = null;
-      if (fingers.size === 1 && view.z > 1.02) {
-        // one finger is left on the zoomed view: it carries on as a pan, and can no longer be a tap
-        const [id, f] = [...fingers.entries()][0];
-        touch = { id, t0: performance.now(), x0: f.x, y0: f.y, x: f.x, y: f.y, moved: true, held: false, pan: true, onLink: true };
-        startPan(f.x, f.y);
-      } else {
-        view.hold = false;
-        view.last = performance.now();
-      }
-    }
-    if (fingers.size === 0) {
-      touchEnd(e);
-      ignoreUntilUp = false;
-    } else if (touch && touch.id === e.pointerId) touchEnd(e);
-    return;
-  }
-  if (drag) {
-    const d = drag;
-    drag = null;
-    if (d.moved) {
-      endPan();
-      dragged = true;
-      setTimeout(() => (dragged = false), 0);
-    } else if (!d.link && e.type === "pointerup") {
-      const [x, y] = toScene(e.clientX, e.clientY);
-      spawnWave(x, y);
-    }
-  }
+  if (e.type === "pointerleave") state.e.on = false;
+  else if (e.pointerType === "touch") scene && !reduce ? touchEnd(e) : (state.e.on = false);
 };
 window.addEventListener("pointerup", pointerOff, { passive: true });
 window.addEventListener("pointercancel", pointerOff, { passive: true });
@@ -2026,8 +1626,6 @@ function frame(now) {
 // one step of everything that moves (dt in seconds, capped by the caller)
 function update(now, dt) {
   state.time = (now - t0) / 1000;
-  stepView(now, dt); // (zoom and pan: first, so everything below and the draw see this frame's view)
-
   // the pointer: the nucleus is the hotspot itself; the gradient's centre follows on a spring, never far behind
   const e = state.e;
   spring(e, "x", "vx", e.tx, POINTER_SPRING, dt);
@@ -2054,7 +1652,7 @@ function update(now, dt) {
   // the curtain: open while the pointer is active (after the build is half done), closing softly after it
   const cu = state.cur;
   cu.tk += (1 - Math.exp(-dt * 10)) * ((state.touchMode ? 1 : 0) - cu.tk); // 0 mouse … 1 touch: bigger, and above the finger
-  const cuY = e.ty - (TOUCH_LIFT * cu.tk) / view.z; // (the lift is a screen distance, the scene is magnified)
+  const cuY = e.ty - TOUCH_LIFT * cu.tk;
   const active = e.on && now - state.lastInput <= IDLE_MS && state.intro >= CURTAIN_FROM;
   if (cu.amt < 0.01 && active) {
     cu.x = e.tx;
@@ -2082,8 +1680,6 @@ function update(now, dt) {
   state.nuc += (1 - Math.exp(-dt * 14)) * ((e.on ? 1 : 0) - state.nuc);
   stepTween(state.tog, now);
   state.tog.hot += (1 - Math.exp(-dt * 14)) * ((state.tog.hover || state.tog.focus ? 1 : 0) - state.tog.hot);
-  stepTween(state.zb, now);
-  state.zb.hot += (1 - Math.exp(-dt * 14)) * ((state.zb.hover || state.zb.focus ? 1 : 0) - state.zb.hot);
   state.focusUIAmt += (1 - Math.exp(-dt * 12)) * ((state.focusUI ? 1 : 0) - state.focusUIAmt);
   stepTheme(now);
   state.waves = state.waves.filter((w) => state.time - w.t0 < WAVE_LIFE);
@@ -2204,14 +1800,8 @@ if (new URLSearchParams(location.search).has("debug")) {
       tweenTo(state.tog, 1, ICON_IN_MS, performance.now());
     },
     // touch: the gesture state, and a way to drive the same paths with synthetic events
-    touchState: () => ({ revealAll, tapQuick, lastType, touch: touch && { held: touch.held, moved: touch.moved, pan: touch.pan }, tk: +state.cur.tk.toFixed(2), fingers: fingers.size, pinch: !!pinch }),
-    view,
-    zoomBy,
-    resetZoom,
-    toScene,
+    touchState: () => ({ revealAll, tapQuick, lastType, touch: touch && { held: touch.held, moved: touch.moved }, tk: +state.cur.tk.toFixed(2) }),
     shot: () => scene?.shot(),
-    zoomMax: () => scene?.zoomMax(),
-    stepView,
     cell: () => scene?.cellPx(),
     dpr: () => scene?.dpr,
     adapt,
