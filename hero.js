@@ -84,7 +84,7 @@ const THEME_COLOR = { dark: "#000000", light: "#ffffff" };
 const HOLD_MS = 250; // a press longer than this is a hold, not a tap
 const TOUCH_SLOP = 10; // CSS px: moving further than this turns a press into a drag
 const REVEAL_HIDE_MS = 8000; // revealed marks hide by themselves after this long untouched
-const TOUCH_CURTAIN = 1.9; // the curtain's radius on touch, × the mouse's (a fingertip would cover the mouse-sized one)…
+const TOUCH_CURTAIN = 1.4; // the curtain's radius on touch, × the mouse's (a fingertip would cover the mouse-sized one; the phone's wordmark is bigger now)…
 const TOUCH_LIFT = 24; // …and it sits this many CSS px above the finger
 // Frame time: the dots get one device px coarser (twice at most) if the frames stay slower than this on average.
 const ADAPT_MS = 26;
@@ -1410,6 +1410,8 @@ links.forEach((a) => {
   });
 });
 document.addEventListener("visibilitychange", () => document.hidden && hideMarks());
+// a long press on a touch screen is the curtain, not a context menu / "Look Up" (mouse keeps its right-click menu)
+window.addEventListener("contextmenu", (e) => scene && !reduce && lastType === "touch" && e.preventDefault());
 
 window.addEventListener(
   "pointermove",
