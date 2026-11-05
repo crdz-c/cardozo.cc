@@ -19,7 +19,9 @@ hero.js      letter/mark textures, the dot-field shader, morphs, curtain, 9 s cy
 brands.js    the five brand marks as SVG path data
 raster.js    exact distance transform, corner rounding, blue-noise threshold map
 favicon.ico  the tab icon (16, 32, 48): the wordmark's C dissolving into pixels; favicon.png (64) and apple-touch-icon.png (180) too
+disk/        the CD, in the hero's dots, on a 3D disc you turn: cardozo.cc/disk (see /disk)
 tools/       make-favicon.py draws those three from the C's outline and the site's blue-noise map (needs Pillow and node)
+             make-cd.py cleans the CD's sprite (takes the hand out of a photo of it; needs OpenCV and numpy); test.sh runs disk/'s tests
 CNAME        custom domain for GitHub Pages
 ```
 
@@ -342,6 +344,29 @@ units (11.2 on small wordmarks) · `EDGE_REF` 90 · `EDGE_MIN` 0.45 · `HOLD_MS`
 `TOUCH_CURTAIN` 1.9 · `TOUCH_LIFT` 24 px · `ADAPT_MS` 26 · `ADAPT_MAX` 2 · `BRAND_ROUND` [4, 3] texels · `ROUND_OPEN` / `ROUND_CLOSE` 17 / 9 texels. Dark: ground `#000000`, dots `#f0efea`; light: ground `#ffffff`, dots `#000000`.
 
 Visual direction is inspired by christendijoux.com; the shader, motion and code here are original.
+
+## /disk
+
+[cardozo.cc/disk](https://cardozo.cc/disk) is the CD, in the hero's dots, on a 3D disc you turn. **Only the CD**, and **no shortcut to
+it**: nothing on the home page links there (a test checks), it is reached by its address. `noindex`, no links on it.
+
+- **Drag** turns it (the near side follows the pointer, and it glides on when let go and slows); **scroll or pinch** moves in and
+  out; **click or tap** (a press that does not move) sends the hero's wave: two pulses that push the dots, swell them and open a
+  dark ring that crosses the disc. The disc spins about its own axis, a turn in 9 s, and its dots land in when it opens. Keys:
+  `Space` pauses, `B` replays the landing, `R` or `0` goes home, arrows turn 15°, `+` `-` move.
+- **What it is made of.** The hero's dither and dot material; the disc is not a mesh: for every dither cell a ray meets a disc with
+  its hole, rim and thickness (a real CD's: 0.02 of its radius) and reads a sprite, whose luminance the dots print as density.
+  `engine.js` + `math.js` are the engine, `models/cd.js` + `media/cd.png` the CD, `disk.js` puts them on the page; with no WebGL or no
+  script it shows the sprite flat. Every knob is a query parameter (`?spin=0`, `?thick=0.03`, `?dens=1`, `?cell=1.5`, `?rx=0&ry=0`,
+  `?build=0`, …) and lives in `__lab.P` in the console.
+- **The sprite.** `media/cd.png` comes from a photo of a CD held in a hand: `tools/make-cd.py` takes the hand out, makes the
+  disc a true circle and its hub concentric with the rim (see the script's header). Needs OpenCV and numpy.
+- **Tests.** `tools/test.sh` (node, no dependencies): the engine's maths (the build curve, the rotations, the camera), the shared
+  `raster.js`, and that the page is the CD and only the CD.
+- **The rest is saved, not published.** The same engine also sets pixel text in Jersey 25 word by word and puts any picture, video or
+  sketch on a card; those, the engine's browser tests (WebGL, pointer, text) and `LEARNINGS.md` (what was learned and what was
+  dropped) live whole on the branch `lab-pixel-media`, which is not on the domain. `disk/engine.js` and `disk/math.js` are copies of
+  that branch's `lab/engine.js` and `lab/math.js`: change them there first.
 
 ## Deploy
 
