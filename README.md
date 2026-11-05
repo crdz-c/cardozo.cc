@@ -21,7 +21,8 @@ raster.js    exact distance transform, corner rounding, blue-noise threshold map
 favicon.ico  the tab icon (16, 32, 48): the wordmark's C dissolving into pixels; favicon.png (64) and apple-touch-icon.png (180) too
 lab/         the hero's dot material on its own, on 3D models you can turn: the CD, pixel text in Jersey 25, any picture or loop (see Lab, and lab/LEARNINGS.md)
 tools/       make-favicon.py draws those three from the C's outline and the site's blue-noise map (needs Pillow and node);
-             make-cd.py cleans the lab's CD (takes the hand out of a photo of it; needs OpenCV and numpy)
+             make-cd.py cleans the lab's CD (takes the hand out of a photo of it; needs OpenCV and numpy);
+             test.sh runs the lab's tests
 CNAME        custom domain for GitHub Pages
 ```
 
@@ -388,9 +389,11 @@ and what was tried and dropped, is in [lab/LEARNINGS.md](lab/LEARNINGS.md).
 lab/index.html     the page: one canvas
 lab/lab.js         picks the model (?model=cd | text | picture) and runs the engine
 lab/engine.js      the reusable engine: the hero's material on a 3D plate you turn; dolly, the wave, the build
+lab/math.js        the engine's pure logic (build curve, quaternions, camera and pixel layout, text timing): no DOM, tested under node
 lab/models/        cd.js · text.js · picture.js (index.js lists them): what goes on the plate and how it is shown
 lab/media/cd.png   the CD's sprite, made by tools/make-cd.py
 lab/fonts/         Jersey 25 (SIL OFL, from google/fonts) for the text model
+lab/test/          the tests: *.test.mjs under node, index.html + browser.js in a browser (see Tests)
 ```
 
 **Models, and using the engine elsewhere.** A model is `{ id, params, create(helpers, arg) → source }`: `params` are the knobs it
@@ -496,6 +499,37 @@ fits an ellipse to the rim and warps the disc to a true circle, makes the hub co
 would wobble as the disc spins) while keeping every wedge radial, mirrors the hub's good half over the thumb's, repeats another
 stretch of the wedge sequence over the hand with the seam where the colours match best, and writes a 1024² sprite with the disc
 at 92 %. It is a one-off tuned on one picture. A photo of a different CD needs new constants.
+
+## Tests
+
+The lab has tests: 28 under node and 31 in a browser. No dependencies, no build.
+
+```bash
+tools/test.sh           # node tests: lab/test/*.test.mjs, 28 of them, ~1 s
+tools/test.sh --serve   # …and serves the repo on :8000 for the browser suite: open http://localhost:8000/lab/test/
+```
+
+- **`lab/test/math.test.mjs`** (node): the pure logic of `lab/math.js`. The build curve (monotone, the hero's table, its inverse),
+  the rotations (which way a drag turns, rotation matrices, slerp's short way, the matrices GLSL receives), the camera (what share of
+  the screen a disc or a card takes, in any window), the pixel layout (a font pixel is a whole number of cells, edges on cell
+  boundaries, over 400 random screens) and the text's timing (a word is complete before the next begins).
+- **`lab/test/raster.test.mjs`** (node): `raster.js`, which the hero shares: the distance transform is exactly Euclidean, corners
+  round alike, the blue-noise map is uniform and measurably blue (mean nearest-neighbour distance 2.5 against white noise's 1.5).
+- **`lab/test/repo.test.mjs`** (node): the assets are what they claim (the CD is a 1024² RGBA PNG; Jersey 25 is a TrueType font with
+  its licence), every file the README names exists, every engine knob and its default is in the README.
+- **`lab/test/index.html` + `browser.js`** (a browser): the engine for real, 31 tests on an 800 × 600 canvas at 1×. What a plate takes
+  of the screen and where, foreshortening, the thickness edge-on, the hole, the lattice; the wave's two rings, where they are and that
+  everything comes back; dragging (angle, direction, lag, glide, stop, no glide when held still), taps, long presses, wheel, pinch,
+  keys, pause; models bringing and taking their knobs, a query parameter beating both; pictures, sketches, bad URLs, the build; and
+  the pixel text: the font's grid fits, the bitmap is the text, every lit run on screen is a whole number of font pixels starting on
+  the grid, words land one after another, `order=ltr`, `loop`, turned in 3D, crossed by the wave. It never waits for a frame or the
+  clock (the engine is stepped, the pointer runs on a virtual `performance.now`), so it passes in a background tab or a hidden pane.
+  The title says `PASS 31/31` or `FAIL`, `window.__tests` has the results, `document.body.dataset.done` flips when it ends.
+
+Not automated yet: running the browser suite from the command line (headless Chrome would not start in the sandbox this was written
+in), so it is not in any CI. The tests were checked by breaking the code on purpose (10 mutations: the leftover spin, the half-cell
+shift, the wave's cancelling, the tap time, the glide's friction, the drag's direction, the thickness, the pixel grid read a pixel
+off, the order of the build, the build's inverse): the suite fails every time, and names the right test.
 
 ## Deploy
 

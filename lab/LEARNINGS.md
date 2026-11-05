@@ -80,6 +80,30 @@ dropped, and how to check them.
   flash decays from landing: the hero's mechanism, one level up. The three numbers per pixel travel in the texture's r, g, b and
   are read with NEAREST (blending them across pixels would smear arrival times).
 
+## Tests (and what they found)
+
+Written after the fact, when asked "where are the tests?": until then every check was a throwaway script in a console. See the
+README's "Tests". What writing them taught:
+
+- **They found a real bug**: the CD's spin angle was never reset when another model replaced it, so a picture dropped after the
+  CD had spun showed up rotated, and so did the text (a square measured 656 px instead of 480). A regression test now covers it.
+- **They found a doc that did not match the code**: arrows were said to turn 15° and turned 0.26 rad (14.9°). The code is now
+  π/12.
+- **A test must be able to fail.** Ten deliberate breakages (README, "Tests") were run against the suite. One survived at first:
+  reading the font's pixels at their edges instead of their centres changes nothing when the grid's phase is 0, so that mutation is
+  equivalent; but it showed that nothing checked the bitmap against the text. A test now compares it with a plain render, and a
+  one-pixel shift fails it.
+- **Compare with the right measure.** The plain 41 px render is fatter than the supersampled bitmap (3533 pixels against 3162), so
+  intersection-over-union was 0.895 for a *correct* bitmap; containment (the bitmap lies inside the render, 97 %) is what a shift
+  breaks.
+- **Test at a size where the thing being tested happens.** At 800 × 600 the text's pixel is one cell and the half-cell shift never
+  occurs, so the alignment test passed with the shift removed. It now loops over texts and sizes and insists that some cases need
+  the shift.
+- **Look at what the number really measures.** The wave's first test dipped a band 35 px wide around a ring only ~16 px wide at
+  `dens` 3 (which saturates the dots): it passed for the first ring and failed for the second. Bands centred on where each ring is,
+  at a density that shows its width, test the actual claim, including that there are two rings 0.2 s apart.
+- **Quantisation.** At 1× a cell is 2 px, so an edge a few cells wide cannot show a ratio of exactly 3: the bound says so.
+
 ## Working here (tooling traps)
 
 - **A hidden browser pane runs no animation frames, `img.decode()` never settles, and a screenshot may be stale.** The lab loads
