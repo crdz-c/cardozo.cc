@@ -50,12 +50,11 @@ html {
 
 /* The page has no text to select, and a press-and-hold is a gesture of its own (the curtain). Without this a phone takes
    a held finger for a text selection (iOS "Look Up", Android's handles; ::selection paints in the text colour, a white
-   edge on the dark theme), and a vertical drag for a scroll (the browser then cancels the pointer). Pinch zoom of the
-   page is kept (single-finger panning is not). */
+   edge on the dark theme), and a vertical drag for a scroll (the browser then cancels the pointer). The browser's own
+   pinch zoom is off for the same reason: the page zooms its scene instead (hero.js), pixels magnified. */
 html,
 body {
-  touch-action: none;
-  touch-action: pinch-zoom;
+  touch-action: none; /* the view's own gestures: pinch zooms the scene (see hero.js), one finger pans or holds */
   -webkit-user-select: none;
   user-select: none;
   -webkit-touch-callout: none;
@@ -102,7 +101,6 @@ a {
 
 .hero {
   touch-action: none;
-  touch-action: pinch-zoom; /* no single-finger pan and no double-tap zoom, so a drag is ours and a quick second tap is a tap */
   position: relative;
   isolation: isolate;
   display: flex;
@@ -144,6 +142,7 @@ a {
   margin: 0;
   line-height: 0;
   transform: translate(-50%, -50%);
+  transform-origin: 0 0; /* (the zoom, set by hero.js, scales it about its own corner; see applyView) */
 }
 
 .logo svg {
@@ -237,6 +236,35 @@ a {
   outline: none;
 }
 
+/* ---------------------------------------------------------------- the zoom reset
+   Shown while the view is zoomed in: a 44 px target at the right, sticky at the bottom (the shader draws its icon, four
+   corner brackets round a pixel; it keeps its box while hidden so the icon can fade out where it was). */
+
+.zoom-reset {
+  position: absolute;
+  right: calc(var(--pad) - 11px);
+  bottom: calc(var(--pad) - 11px + env(safe-area-inset-bottom, 0px));
+  z-index: 2;
+  display: block;
+  visibility: hidden;
+  width: 44px;
+  height: 44px;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--fg);
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+}
+
+.gl.zoomed .zoom-reset {
+  visibility: visible;
+}
+
+.zoom-reset:focus-visible {
+  outline: none; /* the compose pass underlines it in pixels */
+}
+
 /* ---------------------------------------------------------------- small screens */
 
 /* a phone held upright: the wordmark nearly spans the screen (the margin is the page's own padding); held sideways it stays
@@ -263,6 +291,22 @@ a {
   -webkit-tap-highlight-color: transparent;
 }
 
+/* A link answers to the letter or the icon itself, and nothing round them (a tap near one used to open it: the whole column,
+   with its empty corners, was the target). So no box is hit-testable: only the letter's shape while it shows the letter, and the
+   mark's box while it shows the mark (hero.js sets .hit-lt / .hit-mk on each link as its shape changes, and both while the curtain
+   has revealed the mark round the pointer). Keyboard focus is unchanged: the whole link still takes it. */
+.logo .hit,
+.logo .lt path,
+.logo .mk-hit,
+.logo .bf path {
+  pointer-events: none;
+}
+
+.logo .ln.hit-lt .lt path,
+.logo .ln.hit-mk .mk-hit {
+  pointer-events: auto;
+}
+
 .logo .ln:focus-visible {
   outline: 1px solid var(--fg);
   outline-offset: 2px;
@@ -277,8 +321,24 @@ a {
 @media (hover: hover) and (pointer: fine) {
   .gl.live body,
   .gl.live .logo .ln,
-  .gl.live .theme {
+  .gl.live .theme,
+  .gl.live .zoom-reset {
     cursor: none;
+  }
+
+  /* zoomed in, the mouse's dot is gone and the system cursor is back: a hand, closed while it drags the view */
+  .gl.live.zoomed body,
+  .gl.live.zoomed .logo .ln {
+    cursor: grab;
+  }
+
+  .gl.live.zoomed.panning body,
+  .gl.live.zoomed.panning .logo .ln {
+    cursor: grabbing;
+  }
+
+  .gl.live.zoomed .zoom-reset {
+    cursor: pointer;
   }
 }
 

@@ -37,7 +37,9 @@ Open <http://localhost:8000>. The boot sequence plays once per browser session; 
 cycle or `null` while paused, the pulse, each letter's amount), `crop(x, y, w, h, zoom)` (the field as rendered, one
 pixel per cell), `tick()` (advance everything to now in 16 ms steps, for scripted checks in previews that throttle
 animation frames), `buildProgress(s)` (the loading curve) and `finish()` (skip the build); also `setTheme("light" | "dark")`,
-`theme`, `touchState()` (the touch gesture state), `adapt(ms)` (feed a frame time to the adaptive quality) and `quality()`.
+`theme`, `touchState()` (the touch gesture state), `adapt(ms)` (feed a frame time to the adaptive quality) and `quality()`;
+for the zoom: `view`, `zoomBy(dlog, x, y)`, `resetZoom()`, `stepView(now, dt)` (run the view on a clock of your own: a preview that
+throttles frames can still be measured), `toScene(x, y)`, `shot()` (the composed screen as a PNG data URL), `cell()`, `dpr()`.
 `?debug&dpr=3` renders as if the screen were 3× (to check a phone's resolution in a desktop browser).
 The page loads no fonts: there is no text on screen.
 
@@ -51,8 +53,16 @@ The page loads no fonts: there is no text on screen.
 | Z | medium.com/@cardozoconc | Medium |
 | C | github.com/crdz-c | GitHub |
 
-The links live in `index.html`: each letter's `<g class="lt">` sits inside an SVG `<a>` with a transparent hit box
-over its column, so the whole column is clickable whatever it shows. Web links open in a new tab
+The links live in `index.html`: each letter's `<g class="lt">` sits inside an SVG `<a>`. **A link answers to the letter or
+the icon itself, and nothing round them** (the whole column, with its empty corners, used to be the target, and a tap near
+one opened it by accident): the `<rect class="hit">` boxes are not hit-testable (they only give keyboard focus its rect), the
+letter's own shape is while the link shows its letter, and the mark's own box (`.mk-hit`, added by `makeBrandGroups()` from
+the mark's measured size) is while it shows its mark; both are while the curtain has revealed the mark round the pointer.
+`updateLetters()` toggles `.hit-lt` / `.hit-mk` on each link as its face changes; the SVG letters are mirrored exactly as
+the drawn ones are (a random identity per visit), or a tap would land on the unmirrored shape. Measured over 3 500 random
+points on the wordmark: 1 707 of the 1 719 points that hit a link were on drawn ink (the other 12 are edge pixels), and the
+column's corners, the hollow of a "C", and the space above and below answer nothing; with the marks showing, the icon's
+box answers and 4 px outside it nothing does. Web links open in a new tab
 (`rel="me noopener"`); each has an `aria-label`. The mark is read from the link's URL, so **remapping is just
 reordering the `href`s** in `index.html`. Under `.gl` the SVG is `opacity: 0`, not hidden: hit-testing, keyboard
 focus (Tab, Enter) and screen readers keep working. A mouse click on a letter always opens its link, letter or mark; so does Enter. On touch a first tap shows the marks and a
@@ -147,12 +157,14 @@ cycle restarts from its hold 3 s after the last input, so it never jumps. A lett
   field runs (`cursor: none` on the page and the letter links; never in the no-WebGL or reduced-motion versions, never
   on touch). The pointer is a ring of dots round a black hole inside a gradient: a precise nucleus (`NUCLEUS_R` 5 CSS px, its hole `HOLE` 0.5 of that, so the hotspot reads as a black point in a ring) drawn exactly on the
   hotspot, every frame, with no smoothing, set off by a thin dark moat (`MOAT` 1.5 × its radius) so it stays legible
-  over bright letters and marks; around it a soft round gradient of the same dots, dense and bright at the centre and
-  thinning outward (`GRAD_R` 0.6 × `POINTER_R` 32 px, `GRAD_D` 0.95), breathing slowly (`BREATHE` 3 %). The gradient's
+  over bright letters and marks; around it a soft, faint haze of the same dots, thinning outward (`GRAD_R` 0.7 ×
+  `POINTER_R` 32 px, `GRAD_D` 0.5, brightness `GRAD_TONE0` 0.12 at its edge to `GRAD_TONE1` 0.42 at its centre, in the field's
+  own cool tint, never white: only the ring is bright; it used to be 0.95 and full white, which read as a loud orbit round
+  the ring and was cut by 61 % in mean level, from 110/255 to 24/255 just outside the ring), breathing slowly (`BREATHE` 3 %). The gradient's
   centre follows on a spring (`POINTER_SPRING` ω 30, critically damped) but never trails by more than `POINTER_LAG`
   0.3 × 32 px. Over a letter-link the nucleus grows 25 % and the gradient tightens 15 % and brightens 30 %. The dot
-  pushes the field out radially (`PUSH_AMT` 0.6, thinner inside `THIN` 0.6, compressed just outside `RING` 0.75),
-  bends it sideways with speed (`DEFLECT` 0.35) and leaves a short wake (`WAKE` 0.5); stretch along motion is subtle
+  pushes the field out radially (`PUSH_AMT` 0.6, thinner inside `THIN` 0.6, compressed just outside `RING` 0.35),
+  bends it sideways with speed (`DEFLECT` 0.35) and leaves a short wake (`WAKE` 0.3); stretch along motion is subtle
   (`STRETCH` 0.1). Nothing shows while the pointer is outside the window, or on touch without a finger down.
 - **Fast motion.** No segment is ever drawn between samples; springs are sub-stepped at ≤ 8 ms with `dt` ≤ 50 ms;
   deflection, wake and energy respond to at most `MAX_SPEED` 2400 px/s.
@@ -188,6 +200,8 @@ motion on; with reduced motion or no WebGL a tap simply opens the link. Mouse, p
 | **tap a revealed mark** | opens that letter's link |
 | **tap anywhere else** | hides the marks if they are shown; if they are hidden, sends the two-pulse wave (which reveals them for a moment and takes them back) |
 | **press and hold** (> `HOLD_MS` 250), **or drag** (> `TOUCH_SLOP` 10 px) | the curtain comes to the finger and follows it; letting go closes it. A hold or a drag never opens a link |
+| **two fingers** | pinch: zoom the view into the pixels (see *Zoom*), anchored between the fingers, which also pan it |
+| **drag, zoomed in** | pans the view (one finger); a still press still brings the curtain |
 
 Details. The curtain is `TOUCH_CURTAIN` 1.9× the mouse's radius and sits `TOUCH_LIFT` 24 CSS px above the finger
 (eased in with `state.cur.tk`, 0 mouse … 1 touch), because a fingertip covers a mouse-sized disc; the mouse's ring and
@@ -196,12 +210,55 @@ touch restarts it), and when the page is left (`visibilitychange`, e.g. after op
 pinned the same way keyboard focus pins one (`pinned()`).
 
 **Nothing may take the finger.** `html` is `overflow: hidden` with `overscroll-behavior: none`, and `html`, `body` and `.hero`
-are `touch-action: pinch-zoom` (no single-finger pan, no double-tap zoom; the hero no longer has a `min-height`, which used
-to make a landscape phone scroll). Without that a vertical drag was taken for a scroll or a rubber-band and the browser
+are `touch-action: none` (the browser pans and zooms nothing: the view does, see *Zoom*; the hero no longer has a
+`min-height`, which used to make a landscape phone scroll). Without that a vertical drag was taken for a scroll or a rubber-band and the browser
 cancelled the pointer, so the hold never worked upright. The page has no text to select (`user-select: none`,
 `-webkit-touch-callout: none`, and a `contextmenu` guard on touch): otherwise a held finger on a phone is taken for text
 and iOS opens "Look Up" (Android shows selection handles), and `::selection`, painted in the text colour, left a white
 edge on the dark theme.
+
+## Zoom
+
+The wheel, a trackpad's pinch (which a browser reports as ctrl+wheel), two fingers, or the `+` / `−` keys zoom the view
+(plain scrolling follows the natural direction: scrolling "down", which on a Mac with natural scrolling is a swipe up, zooms
+in, whatever the system's setting makes of the gesture; a pinch zooms in as the fingers spread; `ZOOM_WHEEL` is signed, make
+it negative to flip scrolling)
+into the pixels, as if the page were a canvas: **what is magnified is the field's own cells**, so at the limit every dot is a
+plain square (`ZOOM_CELL_PX` 28 CSS px wide: 28× where a cell is 1 CSS px, up to 42× on a 3× phone) and what each one does
+(twinkle, flicker, a morph, a wave, the theme change) can be watched. `0` resets. Dragging pans a zoomed view (mouse; one
+finger); a click on the background still sends the wave (on the release, so a drag does not), a press still brings the curtain.
+
+- **How it renders.** The scene is drawn exactly as before, at the unzoomed layout; the compose pass magnifies it
+  (`uZoom`, `uPan`: nearest, so each cell is a square of its own colour). The pointer, the curtain, the waves and the
+  focus underline live in scene coordinates (`toScene()`), so they scale with the scene. The mouse's ring and gradient
+  fade out as it zooms (the system cursor returns: a grab hand, closed while it drags); a finger's lifted curtain is a
+  screen distance, so it is divided by the zoom.
+- **The links stay put.** The `.logo` SVG, whose `<a>` elements are the real links, gets the same transform in CSS (about its own
+  corner, `applyView()`), so a click, hover or keyboard focus lands on what is drawn. The wordmark's own place for the shader
+  (`measureLogo()`) divides that zoom out.
+- **The buttons stay on the screen.** The theme switch and the zoom reset are not part of the scene: the compose pass draws their
+  icons (moon / sun; four corner brackets round a pixel, "fit") in screen cells, with a one-cell ground-coloured outline
+  once zoomed, and the focus underline, with the same per-cell theme change as the scene. The reset button (right, bottom,
+  sticky) lights in once the zoom passes `ZOOM_SHOW` 1.04 and goes out at 100 %.
+- **Fluid while moving, never half a pixel at rest.** The shown zoom (in log space) follows its target on a critically damped
+  spring (`ZOOM_OMEGA` 15, `ZOOM_OMEGA_DIRECT` 48 while fingers hold it): no jerk at the start of a gesture, the same at 30, 60
+  and 120 Hz. Past the limit it stretches on a rubber band (`ZOOM_SOFT` 0.12 in log units) and settles back. After
+  `ZOOM_IDLE_MS` 170 without input it **settles onto a zoom where every cell is a whole number of device px** (steps of
+  1/cell: 1×, 1.5×, 2×… with 2 px cells), **going the way the gesture was going** (in when zooming in, out when zooming out, so even a
+  small gesture lands on the next step instead of snapping back), as a glide on that same spring, not a jump; and the pan lands
+  on whole device px. Measured on the composed screen at 1.5×, 2×, 11× and the 28× limit: every run of one colour along
+  the sampled rows is a multiple of the cell's size in device px (0 of 540, 466, 265 and 107 were not).
+  A released drag glides on (`PAN_FRICTION` 4.5/s, when faster than `PAN_GLIDE_MIN` 70 px/s) and stops at the scene's edge, which
+  the view never shows past.
+- **The way back to 100 %** (the button, or `0`) is one glide, not a spring on the zoom alone (which, when the scene's edge caught
+  the view on the way out, drifted it sideways): the log-zoom runs out on a smootherstep (no jerk at either end) while the scene
+  point at the middle of the screen flies to the scene's own centre, so it lands on exactly 100 % with nothing left to correct.
+  It lasts `RESET_BASE` 0.6 s plus `RESET_PER_LOG` 0.2 s per unit of log-zoom (0.8 s from 3×, 1.3 s from the 28× limit);
+  measured on a virtual clock the zoom only ever decreases, its speed at the first and last frame is 0.6 % and 0.1 % of the
+  peak, and it ends at z = 1, t = 0 with the CSS transform cleared. Any wheel, key, drag or pinch during it takes over from where
+  it is (no jump).
+- **Holding a point.** Wheel or pinch zooms about the cursor or the midpoint of the fingers (the scene point under it stays under it);
+  two fingers also pan. Zoom needs WebGL and motion: with reduced motion or no WebGL the page does not zoom.
 
 ## How things appear
 
@@ -218,9 +275,11 @@ Dark (true black ground, paper dots `#f0efea`) and light (true white `#fff` grou
 paint already has the right one: an inline script in `index.html` sets `<html data-theme>` from `?theme=`, else the
 saved choice (`localStorage` `cc-theme`), else the system's `prefers-color-scheme` (which it keeps following until the
 visitor chooses). A switch at the top right (a 44 px `<button>`, `aria-label` "Switch to light mode" / "Switch to dark
-mode"; the shader draws it in solid pixels, **a moon in the dark theme and a sun in the light one** (a crescent; a disc
-with eight rays), each cell drawing the shape of the theme it is in, so the icon turns moon ⇄ sun pixel by pixel with
-the rest of the screen; the SVG fallback does the same with CSS; hover or focus lights it) toggles it. Both palettes
+mode"; the shader draws it **in the letters' own material**, **a moon in the dark theme and a sun in the light one** (a
+crescent; a disc with eight rays): dots on the checkerboard lattice in the dark theme, solid ink in the light one, the edge
+a ramp of density the dots dither across (`ICON_EDGE`), each dot twinkling and flickering like theirs (it was solid pixels, which
+read as too filled), each cell drawing the shape of the theme it is in, so the icon turns moon ⇄ sun pixel by pixel with the
+rest of the screen; the SVG fallback does the same with CSS; hover or focus lights it) toggles it. Both palettes
 live in the shader.
 
 **Light is not just the dark one inverted.** Black dots on white at the dark theme's density read as grey, so in light
@@ -298,8 +357,8 @@ Shader (`FIELD` / `PUSH` in `hero.js`): `DENS_L` 0.72 · `DENS_WAVE` 0.25 · `DE
 `REPEL` 0.5 · `REPEL_W` 0.9 · `REPEL_SOFT` 0.12 · `REPEL_RIM` 1.6 ·
 `PULSE_L` 0.3 · `PULSE_THIN` 0.45 · `PULSE_GATHER` 0.05 · `BUILD_GAIN` 1.03 ·
 `FLASH` 0.06 · `DOT_FADE` 0.12 · `DOT_FLOOR` 0.3 · `TONE_L` 0.97 · `TWINKLE` 0.3 · `FIELD_TINT` · `SEA_AMP` 0.9 ·
-`SEA_STIR` 4.0 · `SEA_GLOBAL` 1.2 · `SEA_SCALE` 0.3 · `SEA_SPEED` 0.05 · `SEA_RIPPLE` 0.07 · `GRAD_R` 0.6 · `GRAD_D`
-0.95 · `MOAT` 1.5 · `PUSH_AMT` 0.6 · `DEFLECT` 0.35 · `RING` 0.75 · `THIN` 0.6 · `WAKE` 0.5 · `STRETCH` 0.1 ·
+`SEA_STIR` 4.0 · `SEA_GLOBAL` 1.2 · `SEA_SCALE` 0.3 · `SEA_SPEED` 0.05 · `SEA_RIPPLE` 0.07 · `GRAD_R` 0.7 · `GRAD_D`
+0.5 · `GRAD_TONE0` 0.12 · `GRAD_TONE1` 0.42 · `MOAT` 1.5 · `PUSH_AMT` 0.6 · `DEFLECT` 0.35 · `RING` 0.35 · `THIN` 0.6 · `WAKE` 0.3 · `STRETCH` 0.1 ·
 `BREATHE` 0.03 · `WAVE_SPEED` 1.05 · `WAVE_WIDTH` 0.1 · `WAVE_PUSH` 0.008 · `WAVE_DENS` 0.4 · `HOLE` 0.5 · `FLICK_C` 0.8 · `FLICK_L` 0.4 ·
 `WREV_LEAD` 0.1 · `WREV_HOLD` 0.36 · `WREV_TAIL` 0.5 · `WREV_THIN` 0.65 · `WNULL_AT` 0.07 · `WNULL_W` 0.05 · `WNULL` 0.9 · `THEME_SOFT` 0.14 · `THEME_SPATIAL` 0.78 ·
 `LIGHT_INK` 0.7 · `LIGHT_FIELD` 1.7 · `LIGHT_FIELD_DENS` 1.35 · `FLICK_L_INK` 0.22 · `LIGHT_SOFT` 0.08 · `LIGHT_OVER` 1.25 · `LIGHT_FLASH` 0.3 · `BG_D` / `FG_D` / `BG_L` / `FG_L` (the two palettes).
@@ -307,7 +366,9 @@ JS (top of `hero.js`): `POINTER_R` 32 px · `NUCLEUS_R` 5 px · `POINTER_SPRING`
 `AFTERGLOW` 2.8 s · `MAX_SPEED` 2400 px/s · `CURTAIN_R` 0.85 · `CURTAIN_SPRING` [16, 1] · `REPEL_OPEN` [7, 0.8] · `REPEL_CLOSE` [3.2, 1] · `CURTAIN_OPEN` 10/s ·
 `CURTAIN_CLOSE` 3/s · `IDLE_MS` 3000 · `MORPH_MS` 900–1300 · `CYCLE_MS` 9000 · `SOLO_AT` 700–3600 · `SOLO_BACK` 0.5 ·
 `SOLO_BACK_AFTER` 1700–2600 · `CONVERGE_AT` 6200 · `CONVERGE_STAGGER` 500 · `PULSE_AT` 6000 · `PULSE_MS` 3600 ·
-`WAVE_LIFE` 3.2 s · `WAVE_PULSES` 2 · `WAVE_PULSE_GAP` 0.2 s · `WAVE_PULSE_DECAY` 0.15 · `MAX_WAVES` 8 · `ICON_R` 11 px · `ICON_IN_MS` 700 ·
+`WAVE_LIFE` 3.2 s · `WAVE_PULSES` 2 · `WAVE_PULSE_GAP` 0.2 s · `WAVE_PULSE_DECAY` 0.15 · `MAX_WAVES` 8 · `ICON_R` 11 px · `ICON_IN_MS` 700 · `ZOOM_CELL_PX` 28 · `ZOOM_OMEGA` 15 · `ZOOM_OMEGA_DIRECT` 48 · `ZOOM_WHEEL` 0.0018 ·
+`ZOOM_WHEEL_PINCH` 0.012 · `RESET_BASE` 0.6 · `RESET_PER_LOG` 0.2 · `ICON_DENS` 0.95 and `ICON_EDGE` 0.9 (in the compose shader) · `ZOOM_SOFT` 0.12 · `ZOOM_IDLE_MS` 170 · `ZOOM_SHOW` 1.04 · `ZOOM_KEY` 0.4 · `MOUSE_SLOP` 4 px · `PAN_FRICTION` 4.5 ·
+`PAN_GLIDE_MIN` 70 ·
 `THEME_MS` 1500 · `BUILD_RATE` (above) · `BUILD_S` 8 s · `BUILD_QUICK` 2.8 s · `CURTAIN_FROM` 0.5 · `BRAND_H` 9.5
 units (11.2 on small wordmarks) · `EDGE_REF` 90 · `EDGE_MIN` 0.45 · `HOLD_MS` 250 · `TOUCH_SLOP` 10 px · `REVEAL_HIDE_MS` 8 s ·
 `TOUCH_CURTAIN` 1.9 · `TOUCH_LIFT` 24 px · `ADAPT_MS` 26 · `ADAPT_MAX` 2 · `BRAND_ROUND` [4, 3] texels · `ROUND_OPEN` / `ROUND_CLOSE` 17 / 9 texels. Dark: ground `#000000`, dots `#f0efea`; light: ground `#ffffff`, dots `#000000`.
