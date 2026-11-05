@@ -30,6 +30,10 @@
         height: 100%;
         display: block;
         image-rendering: pixelated; /* crisp cells when the canvas is upscaled on high-DPI screens */
+        cursor: grab; /* the model turns under a drag; a tap (no movement) sends the wave */
+      }
+      canvas.drag {
+        cursor: grabbing;
       }
     </style>
   </head>

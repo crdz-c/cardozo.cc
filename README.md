@@ -19,7 +19,7 @@ hero.js      letter/mark textures, the dot-field shader, morphs, curtain, 9 s cy
 brands.js    the five brand marks as SVG path data
 raster.js    exact distance transform, corner rounding, blue-noise threshold map
 favicon.ico  the tab icon (16, 32, 48): the wordmark's C dissolving into pixels; favicon.png (64) and apple-touch-icon.png (180) too
-lab/         the hero's dot material on its own, a stage for images, video loops and animations (see Lab); starts with a spinning CD
+lab/         the hero's dot material on its own, on a 3D model you can turn: the CD, or any image, video loop or animation (see Lab)
 tools/       make-favicon.py draws those three from the C's outline and the site's blue-noise map (needs Pillow and node);
              make-cd.py cleans the lab's CD (takes the hand out of a photo of it; needs OpenCV and numpy)
 CNAME        custom domain for GitHub Pages
@@ -379,48 +379,73 @@ Visual direction is inspired by christendijoux.com; the shader, motion and code 
 
 ## Lab
 
-`lab/` is the hero's material with nothing else on screen: no wordmark, links, pointer, curtain, waves, theme switch or zoom.
-It is a place to see what the dots do to an image, a video loop or an animation. Open <http://localhost:8000/lab/>: it starts
-with a CD spinning in the middle (`media/cd.png`, one turn in 9 s). It shares `raster.js` with the hero and nothing else, and
-it is `noindex`. (Pages serves it too, at `/lab/`.)
+`lab/` is the hero's material with nothing else on screen (no wordmark, links, curtain, theme switch or zoom) on a **model you can
+turn**. Open <http://localhost:8000/lab/>: it starts with the CD in 3D, spinning about its own axis (`media/cd.png`, one turn in
+9 s). Drag to turn it, scroll or pinch to move in and out, click for the wave. It shares `raster.js` with the hero and nothing
+else, and it is `noindex`. (Pages serves it too, at `/lab/`.)
 
-**How it works.** The stage is a 2D canvas with one pixel per dither cell. Each frame the source is placed on it (scaled,
-rotated) and the hero's two passes run: *field* reads the stage per cell and lights dots (a cell's luminance is the
-density of its dots; bright areas sit on the checkerboard lattice so dots never fuse, as the letters do; dim ones are free
-blue noise, as the field is) and *compose* blows the cells up to exact squares. The dither is fixed to the screen, so a
-moving picture shimmers through it. Kept from the hero, with its numbers: the blue-noise dither, `DOT_FADE`, `DOT_FLOOR`,
-the per-dot twinkle and flicker, the ambient field with its calm sea (centred on the screen now), the build curve (dots
-land at random when a source appears, `?build=2.8` s). Different from it: the shape is a tone map, not a mask, so a dim
-tone's dots are only a little dimmer (`TONE_BRIGHT` 0.75, the hero's marks use 0.5) and the density carries the tone; a cell
-is `?cell=1.2` CSS px (what the wordmark has on a desktop). There is only the dark theme.
+**How it works.** The plate is not a mesh. For every dither cell the *field* pass casts a ray from a perspective camera and meets
+the plate analytically: a **disc** (two faces, the rim, and the wall of the hole, which is 0.118 of the CD's radius) or a **card**
+(a box with the picture's proportions; anything that is not the CD). The texture is read where the ray lands (1024² with mipmaps
+and anisotropic filtering, so a slanted face stays clean), its luminance is the tone, and the hero's dots print it: a cell's tone
+is the density of its dots; bright areas sit on the checkerboard lattice so dots never fuse, as the letters do; dim ones are free
+blue noise, as the field is. A face turned away is a little darker (`shade`), its far side darker still, and a wall catches a light
+from the upper left. The dither is fixed to the screen, so the model turns under it. *Compose* then blows the cells up to exact
+squares. Kept from the hero, with its numbers: the blue-noise dither, `DOT_FADE`, `DOT_FLOOR`, the per-dot twinkle and flicker, the
+ambient field with its calm sea (centred on the screen now), the build curve (dots land at random when a source appears,
+`?build=2.8` s) and the wave. Different from it: the shape is a tone map, not a mask, so a dim tone's dots are only a little
+dimmer (`TONE_BRIGHT` 0.75, the hero's marks use 0.5) and the density carries the tone; a cell is `?cell=1.2` CSS px (what the
+wordmark has on a desktop). There is only the dark theme.
 
-**Put something on it.**
+**Turning it.**
+
+| input | what |
+|---|---|
+| drag (mouse, one finger) | turns the model about the screen's axes, the near side following the pointer; across the screen's shorter side is 195° (`ROT_PER_SIDE` 3.4 rad). The shown pose follows the dragged one eased (`FOLLOW_DRAG` 26/s: fluid, a little behind). On release it keeps gliding at the speed of the last ~50 ms of the drag (at most `MAX_SPIN_RATE` 16 rad/s) and slows (`FRICTION` 4/s); a touch stops it; held still before letting go means no glide |
+| wheel, pinch, two fingers, `+` `-` | dolly the camera in and out, eased (`ZOOM_FOLLOW` 14/s), between ×0.43 and ×2.6; scrolling down moves in, as on the hero, and so does a pinch apart |
+| arrows | turn by 15° |
+| `R` or `0` | back to the home pose (`rx` 26° tilt, `ry` -20°) and distance |
+| click or tap | a press that does not move (under `MOUSE_SLOP` 4 px, 10 on touch) and is released within 450 ms sends the wave from there |
+| `Space`, `B` | pause (spin, dots, waves and video; the model can still be turned), replay the build |
+
+**The wave.** The hero's, with its numbers: two pulses 0.2 s apart (the second 15 % weaker), each one long ring crossing the screen
+in ~3 s. The dots, the model included (it is sampled from displaced positions, so it ripples), are pushed along the ring, swell in
+density, the field thins behind the front and the dots' energy is cancelled in a band just behind it (a dark ring opens and travels
+across the model), and the sea is stirred (energy 0.85, settling over 2.8 s). What the hero reveals behind its wordmark has no
+counterpart here.
+
+**Put something on it.** The CD is a disc with its hole; anything else becomes a card.
 
 | how | what |
 |---|---|
 | `?src=media/clip.mp4` | a URL (same origin, or CORS-enabled): image, animated GIF, mp4/webm (muted, looped). Put files in `lab/media/` |
 | drop or paste a file | the same, from disk or the clipboard; the dots build in again |
-| `?src=sketch:rings`, `sketch:sweep` | built-in animations drawn in JS (white on black) |
-| `__lab.sketch((ctx, t, W, H) => …)` | your own: draw on the stage in cell units, `t` in seconds |
+| `?src=sketch:rings`, `sketch:sweep` | built-in animations drawn in JS (white on black, on a square card) |
+| `__lab.sketch((ctx, t, W, H) => …)` | your own: draw on the 1024² texture, `t` in seconds |
 | `__lab.load(urlOrFileOrSketch)` | any of those from the console |
+| `?shape=disc`, `?hole=0.2` | put a picture on a disc instead (it is inscribed in the disc's square), with a hole of that radius |
 
-Keys: `Space` pauses (spin, dots and video), `B` replays the build. Query parameters, also live in `__lab.P` (change one,
-it applies on the next frame; `cell` needs `__lab.resize()`):
+Query parameters, also live in `__lab.P` (change one, it applies on the next frame; `cell` needs `__lab.resize()`):
 
 | param | default | |
 |---|---|---|
-| `spin` | 40 for the CD, 0 for the rest | deg/s, positive clockwise |
-| `size` / `fit` | 0.8 / `contain` | longer side as a share of the screen's shorter one; `fit=cover` fills the screen |
+| `spin` | 40 for the CD, 0 for the rest | deg/s about the plate's own axis, positive clockwise |
+| `rx` / `ry` | 26 / -20 | the home pose: tilt back and turn sideways, degrees |
+| `size` / `fit` | 0.8 / `contain` | the plate's share of the screen at home (a disc's diameter, a card's longer side); `fit=cover` makes a card fill the screen |
+| `thick` / `shade` | 0.03 / 0.35 | the plate's thickness (a real CD: 0.02) and how much a slanted face darkens |
 | `dens` | 1.2 | share of lattice sites lit at full tone (the hero's letters: 0.72); above 1 the brightest tones saturate to a solid checkerboard |
 | `black` / `white` / `gamma` | 0.3 / 0.9 / 1 | levels and curve applied to the luminance. The CD's body sits between 0.5 and 0.72, so it needs the stretch; a high-contrast picture wants `black=0&white=1` |
 | `lattice` | 1 | 0 prints free blue noise instead of the checkerboard (denser, more like a stipple) |
-| `field` | 1 | the ambient dots round the picture, 0 … 1 |
+| `field` | 1 | the ambient dots round the plate, 0 … 1 |
 | `color` | 0 | 0 paper-white dots (the hero); 1 each dot takes its source's hue |
 | `flicker` | 1 | depth of the picture's flicker, × the hero's |
 | `build` | 2.8 | seconds the dots take to land; 0 turns the build off |
+| `tex` | 1024 | the texture's side (a power of two) |
 
-`?dpr=` imitates another screen's pixel ratio. Debug: `__lab.step(ms)` advances the clock and draws (for a preview that
-throttles frames), `__lab.shot()` returns the screen as a PNG data URL, `__lab.info()` the cell size, canvas size and source.
+`?dpr=` imitates another screen's pixel ratio. Debug: `__lab.pose(rx, ry)` sets the pose at once, `__lab.turn(dx, dy)` turns as a drag
+of that many px, `__lab.wave(x, y)` sends the wave, `__lab.step(ms)` advances the clock and draws (use it, with `performance.now`
+stubbed if you drive pointer events, in a preview whose pane is hidden: the browser runs no animation frames there), `__lab.shot()`
+returns the screen as a PNG data URL, `__lab.info()` the sizes, plate and source, `__lab.view` the pose.
 
 **The CD.** `tools/make-cd.py` makes `media/cd.png` from a picture of a CD held in a hand (not in the repo): it finds the hand,
 fits an ellipse to the rim and warps the disc to a true circle, makes the hub concentric with the rim (it sat 17 px off, which
