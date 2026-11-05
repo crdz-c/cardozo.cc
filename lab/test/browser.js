@@ -380,6 +380,23 @@ test("a query parameter beats a model's default, and the engine's", async () => 
   c2.remove();
 });
 
+test("drop: false ignores a file dropped on the page; the default engine takes it", async () => {
+  const c3 = document.createElement("canvas");
+  Object.assign(c3.style, { position: "fixed", left: "-9999px", width: "400px", height: "300px" });
+  document.body.appendChild(c3);
+  const closed = createEngine({ canvas: c3, query: new URLSearchParams("dpr=1"), drop: false });
+  await closed.useModel(MODELS.cd);
+  await lab.useModel(MODELS.cd);
+  const png = await (await fetch(dataURL(64, 64, (x, w, h) => { x.fillStyle = "#fff"; x.fillRect(0, 0, w, h); }))).blob();
+  const dt = new DataTransfer();
+  dt.items.add(new File([png], "dropped.png", { type: "image/png" }));
+  dispatchEvent(new DragEvent("drop", { dataTransfer: dt, bubbles: true, cancelable: true }));
+  for (let i = 0; i < 40 && lab.info().source === "cd"; i++) await new Promise((r) => setTimeout(r, 25)); // (the image loads)
+  ok(lab.info().source === "dropped.png", `the default engine took the file (${lab.info().source})`);
+  ok(closed.info().source === "cd", `the engine with drop: false did not (${closed.info().source})`);
+  c3.remove();
+});
+
 test("a picture becomes a card of its own proportions; a sketch animates; a bad URL leaves things as they were", async () => {
   await lab.load(dataURL(640, 360, (x, w, h) => { x.fillStyle = "#fff"; x.fillRect(0, 0, w, h); }));
   let i = lab.info();

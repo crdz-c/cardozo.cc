@@ -4,7 +4,7 @@
 #
 #   tools/test.sh            node tests only
 #   tools/test.sh --serve    …then serve the repo on :8000 for the browser suite: open http://localhost:8000/lab/test/
-#                            (the tab's title says PASS 31/31 or FAIL, and the page lists every test)
+#                            (the tab's title says PASS 32/32 or FAIL, and the page lists every test)
 set -e
 cd "$(dirname "$0")/.."
 node --test lab/test/*.test.mjs

@@ -502,7 +502,7 @@ at 92 %. It is a one-off tuned on one picture. A photo of a different CD needs n
 
 ## Tests
 
-The lab has tests: 28 under node and 31 in a browser. No dependencies, no build.
+The lab has tests: 28 under node and 32 in a browser. No dependencies, no build.
 
 ```bash
 tools/test.sh           # node tests: lab/test/*.test.mjs, 28 of them, ~1 s
@@ -517,14 +517,14 @@ tools/test.sh --serve   # …and serves the repo on :8000 for the browser suite:
   round alike, the blue-noise map is uniform and measurably blue (mean nearest-neighbour distance 2.5 against white noise's 1.5).
 - **`lab/test/repo.test.mjs`** (node): the assets are what they claim (the CD is a 1024² RGBA PNG; Jersey 25 is a TrueType font with
   its licence), every file the README names exists, every engine knob and its default is in the README.
-- **`lab/test/index.html` + `browser.js`** (a browser): the engine for real, 31 tests on an 800 × 600 canvas at 1×. What a plate takes
+- **`lab/test/index.html` + `browser.js`** (a browser): the engine for real, 32 tests on an 800 × 600 canvas at 1×. What a plate takes
   of the screen and where, foreshortening, the thickness edge-on, the hole, the lattice; the wave's two rings, where they are and that
   everything comes back; dragging (angle, direction, lag, glide, stop, no glide when held still), taps, long presses, wheel, pinch,
   keys, pause; models bringing and taking their knobs, a query parameter beating both; pictures, sketches, bad URLs, the build; and
   the pixel text: the font's grid fits, the bitmap is the text, every lit run on screen is a whole number of font pixels starting on
   the grid, words land one after another, `order=ltr`, `loop`, turned in 3D, crossed by the wave. It never waits for a frame or the
   clock (the engine is stepped, the pointer runs on a virtual `performance.now`), so it passes in a background tab or a hidden pane.
-  The title says `PASS 31/31` or `FAIL`, `window.__tests` has the results, `document.body.dataset.done` flips when it ends.
+  The title says `PASS 32/32` or `FAIL`, `window.__tests` has the results, `document.body.dataset.done` flips when it ends.
 
 Not automated yet: running the browser suite from the command line (headless Chrome would not start in the sandbox this was written
 in), so it is not in any CI. The tests were checked by breaking the code on purpose (10 mutations: the leftover spin, the half-cell

@@ -361,9 +361,9 @@ const VIDEO_RE = /\.(mp4|webm|mov|m4v|ogv)(\?|#|$)/i;
 const GIF_RE = /\.gif(\?|#|$)/i;
 
 // ------------------------------------------------------------------ the engine
-// createEngine({ canvas, query }) → the lab: { P, view, useModel, load, sketch, … }. `query` is a URLSearchParams: a knob is
-// read from it first, so ?dens=0.8 beats a model's default.
-export function createEngine({ canvas, query: q = new URLSearchParams(location.search) }) {
+// createEngine({ canvas, query, drop }) → the lab: { P, view, useModel, load, sketch, … }. `query` is a URLSearchParams: a knob is
+// read from it first, so ?dens=0.8 beats a model's default. `drop: false` ignores files dropped or pasted on the page.
+export function createEngine({ canvas, query: q = new URLSearchParams(location.search), drop = true }) {
   const num = (k, d) => {
     const v = parseFloat(q.get(k));
     return Number.isFinite(v) ? v : d;
@@ -815,16 +815,19 @@ export function createEngine({ canvas, query: q = new URLSearchParams(location.s
     if (source?.el instanceof HTMLVideoElement) paused ? source.el.pause() : source.el.play().catch(() => {});
   }
   const rebuild = () => (buildT0 = clock);
-  addEventListener("dragover", (e) => e.preventDefault());
-  addEventListener("drop", (e) => {
-    e.preventDefault();
-    const f = e.dataTransfer?.files?.[0];
-    if (f) load(f);
-  });
-  addEventListener("paste", (e) => {
-    const f = e.clipboardData?.files?.[0];
-    if (f) load(f);
-  });
+  if (drop) {
+    // (a file dropped or pasted on the page becomes a card; a page that shows one model only passes drop: false)
+    addEventListener("dragover", (e) => e.preventDefault());
+    addEventListener("drop", (e) => {
+      e.preventDefault();
+      const f = e.dataTransfer?.files?.[0];
+      if (f) load(f);
+    });
+    addEventListener("paste", (e) => {
+      const f = e.clipboardData?.files?.[0];
+      if (f) load(f);
+    });
+  }
   addEventListener("keydown", (e) => {
     if (e.metaKey || e.ctrlKey || e.altKey) return;
     const turnKey = (ax, ay, az, a) => (e.preventDefault(), (view.qt = qnorm(qmul(qaxis(ax, ay, az, a), view.qt))));
