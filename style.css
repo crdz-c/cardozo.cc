@@ -51,10 +51,10 @@ html {
 /* The page has no text to select, and a press-and-hold is a gesture of its own (the curtain). Without this a phone takes
    a held finger for a text selection (iOS "Look Up", Android's handles; ::selection paints in the text colour, a white
    edge on the dark theme), and a vertical drag for a scroll (the browser then cancels the pointer). The browser's own
-   pinch zoom is off for the same reason: the page zooms its scene instead (hero.js), pixels magnified. */
+   pinch zoom is off for the same reason: the screen stays fixed, and hover and touch answer in place of scroll and zoom. */
 html,
 body {
-  touch-action: none; /* the view's own gestures: pinch zooms the scene (see hero.js), one finger pans or holds */
+  touch-action: none; /* the page's own gestures (hero.js): a finger's drag brings the curtain; nothing scrolls, pans or zooms */
   -webkit-user-select: none;
   user-select: none;
   -webkit-touch-callout: none;
@@ -142,7 +142,6 @@ a {
   margin: 0;
   line-height: 0;
   transform: translate(-50%, -50%);
-  transform-origin: 0 0; /* (the zoom, set by hero.js, scales it about its own corner; see applyView) */
 }
 
 .logo svg {
@@ -236,35 +235,6 @@ a {
   outline: none;
 }
 
-/* ---------------------------------------------------------------- the zoom reset
-   Shown while the view is zoomed in: a 44 px target at the right, sticky at the bottom (the shader draws its icon, four
-   corner brackets round a pixel; it keeps its box while hidden so the icon can fade out where it was). */
-
-.zoom-reset {
-  position: absolute;
-  right: calc(var(--pad) - 11px);
-  bottom: calc(var(--pad) - 11px + env(safe-area-inset-bottom, 0px));
-  z-index: 2;
-  display: block;
-  visibility: hidden;
-  width: 44px;
-  height: 44px;
-  padding: 0;
-  border: 0;
-  background: transparent;
-  color: var(--fg);
-  cursor: pointer;
-  -webkit-tap-highlight-color: transparent;
-}
-
-.gl.zoomed .zoom-reset {
-  visibility: visible;
-}
-
-.zoom-reset:focus-visible {
-  outline: none; /* the compose pass underlines it in pixels */
-}
-
 /* ---------------------------------------------------------------- small screens */
 
 /* a phone held upright: the wordmark nearly spans the screen (the margin is the page's own padding); held sideways it stays
@@ -321,24 +291,8 @@ a {
 @media (hover: hover) and (pointer: fine) {
   .gl.live body,
   .gl.live .logo .ln,
-  .gl.live .theme,
-  .gl.live .zoom-reset {
+  .gl.live .theme {
     cursor: none;
-  }
-
-  /* zoomed in, the mouse's dot is gone and the system cursor is back: a hand, closed while it drags the view */
-  .gl.live.zoomed body,
-  .gl.live.zoomed .logo .ln {
-    cursor: grab;
-  }
-
-  .gl.live.zoomed.panning body,
-  .gl.live.zoomed.panning .logo .ln {
-    cursor: grabbing;
-  }
-
-  .gl.live.zoomed .zoom-reset {
-    cursor: pointer;
   }
 }
 
