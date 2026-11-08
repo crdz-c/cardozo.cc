@@ -766,6 +766,9 @@ uniform vec2  uTexScale;
 uniform vec2  uTexOff;
 uniform float uTexPerCell;
 uniform vec4  uLet[5];    // per letter: amt (0 letter … 1 mark), mirror x, mirror y
+uniform float uColE[4];   // the sheet's columns: the four gaps' midpoints, and the five centres (u, 0 … 1 across the sheet)
+uniform float uColC[5];
+uniform float uAlpha;     // 0: the field's alpha is 1 (the home); 1: it is how much a lit dot belongs to the sheet (the walk reads it)
 uniform sampler2D uBrand;
 uniform vec4  uRev;       // the curtain: centre x, y (device px), radius (device px), openness 0..1
 uniform float uRep;       // the repel around it (oil on water), 0..1, viscous (JS)
@@ -816,22 +819,28 @@ float densityAt(vec2 p) {
   float calm = smoothstep(0.0, 0.15, min(yv, 1.0 - yv));
   return (0.06 + 0.94 * fieldAt(p)) * (0.35 + 0.65 * calm);
 }
+// A sheet is cut into up to five columns, each its own link: the wordmark's five letters (uColE the four gaps' midpoints, uColC
+// the five centres, in u), or one column that is the whole sheet (the gaps past the edge: a page).
 float letterIndex(float u) {
-  return step(18.55 / 90.0, u) + step(36.15 / 90.0, u) + step(54.75 / 90.0, u) + step(71.15 / 90.0, u);
+  return step(uColE[0], u) + step(uColE[1], u) + step(uColE[2], u) + step(uColE[3], u);
 }
 float letterCenter(float li) {
-  if (li < 0.5) return 8.9 / 90.0;
-  if (li < 1.5) return 27.35 / 90.0;
-  if (li < 2.5) return 45.45 / 90.0;
-  if (li < 3.5) return 62.95 / 90.0;
-  return 80.8 / 90.0;
+  float c = uColC[0];
+  for (int i = 1; i < 5; i++) {
+    if (abs(float(i) - li) < 0.5) c = uColC[i];
+  }
+  return c;
 }
 vec2 letterBounds(float li) {
-  if (li < 0.5) return vec2(-0.08, 18.55 / 90.0);
-  if (li < 1.5) return vec2(18.55 / 90.0, 36.15 / 90.0);
-  if (li < 2.5) return vec2(36.15 / 90.0, 54.75 / 90.0);
-  if (li < 3.5) return vec2(54.75 / 90.0, 71.15 / 90.0);
-  return vec2(71.15 / 90.0, 1.08);
+  float lo = -0.08;
+  float hi = 1.08;
+  for (int i = 0; i < 5; i++) {
+    if (abs(float(i) - li) < 0.5) {
+      if (i > 0) lo = uColE[i - 1];
+      if (i < 4) hi = uColE[i];
+    }
+  }
+  return vec2(lo, min(hi, 1.08));
 }
 vec4 letFor(float li) {
   vec4 f = vec4(0.0, 1.0, 1.0, 0.0);
@@ -1075,7 +1084,9 @@ void main() {
   on *= step(DOT_FLOOR, on);
   // both palettes; a cell is in one or the other ('flip', above)
   float amtOn = on * clamp(tone, 0.0, 1.0);
-  gl_FragColor = vec4(mix(mix(BG_D, FG_D * tint, amtOn), mix(BG_L, FG_L * tint, amtOn), flip), 1.0);
+  // (the walk between two sheets needs to tell a lit dot of the sheet from the field's own: alpha is that, only when asked)
+  float ofSheet = on > 0.0 ? smoothstep(0.35, 0.65, max(letter, flash)) : 0.0;
+  gl_FragColor = vec4(mix(mix(BG_D, FG_D * tint, amtOn), mix(BG_L, FG_L * tint, amtOn), flip), mix(1.0, ofSheet, uAlpha));
 }
 `;
 
@@ -1252,7 +1263,7 @@ function createScene() {
   const fbo = gl.createFramebuffer();
 
   const locs = (p, names) => Object.fromEntries(names.map((n) => [n, gl.getUniformLocation(p, n)]));
-  const UF = locs(field, ["uDev", "uE", "uEV", "uER", "uW[0]", "uTime", "uBlue", "uCells", "uCell", "uIntro", "uLogo", "uTexScale", "uTexOff", "uTexPerCell", "uLet[0]", "uBrand", "uRev", "uRep", "uN", "uLink", "uPulse", "uSea", "uEnergy", "uFocus", "uFocusAmt", "uMask", "uThemeT", "uThemeO"]);
+  const UF = locs(field, ["uDev", "uE", "uEV", "uER", "uW[0]", "uTime", "uBlue", "uCells", "uCell", "uIntro", "uLogo", "uTexScale", "uTexOff", "uTexPerCell", "uLet[0]", "uBrand", "uRev", "uRep", "uN", "uLink", "uPulse", "uSea", "uEnergy", "uFocus", "uFocusAmt", "uMask", "uThemeT", "uThemeO", "uColE[0]", "uColC[0]", "uAlpha"]);
   const UC = locs(compose, ["uField", "uBlue", "uCells", "uCell", "uTog", "uHot", "uUF", "uThemeT", "uThemeO", "uTime"]);
 
   gl.useProgram(field);
@@ -1261,6 +1272,9 @@ function createScene() {
   gl.uniform1i(UF.uBlue, 1);
   gl.uniform2f(UF.uTexScale, wm.cw / wm.tw, wm.ch / wm.th);
   gl.uniform2f(UF.uTexOff, MARGIN / wm.tw, MARGIN / wm.th);
+  gl.uniform1fv(UF["uColE[0]"], LETTER_EDGES.slice(1, 5)); // the wordmark's five letters are its five columns
+  gl.uniform1fv(UF["uColC[0]"], LETTER_CENTERS);
+  gl.uniform1f(UF.uAlpha, 0);
   gl.useProgram(compose);
   gl.uniform1i(UC.uField, 3);
   gl.uniform1i(UC.uBlue, 1);
