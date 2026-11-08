@@ -1,14 +1,19 @@
-// cardozo.cc/swarm — one set of dots told to become an interface, a picture, a cube, a sphere, a column; click and they go, like a
-// drone show. An experiment (docs/PLANKTON.md §14), not the home's interface.
+// cardozo.cc/swarm — one set of dots that is told to become the home's wordmark, a panel, a picture, a cube, a sphere, a column.
+// An experiment (docs/PLANKTON.md §14), not the home's interface; the home is the reference (law 9), and the ref button shows it.
 //
-// How it is built, in one paragraph. The dots are a W × H texture of positions and one of velocities, updated on the GPU every frame
-// (update pass): each dot is a spring toward its *target*, with its own stiffness and damping, a swirl while it is far from it
-// (so paths curve) and a moment of its own at which it leaves the old target for the new one (the wave from the click, plus noise).
-// Targets are layers (layers.js: pure maths, sorted so that dot i is near dot i in the next layer). The draw pass reads the
-// positions with gl_VertexID, projects them with a small orbit camera, and draws points, additive, on black. The pixel setting
-// (density.js) decides what a point looks like: fine round dust, or big square cells on the screen's grid with few of them lit.
-import { N, W, H, BODY, LAYERS, rng, dust, scatter, assemble, bitmapBody, cubeBody, sphereBody, columnBody, rotation } from "./layers.js";
-import { pixelSetting } from "./density.js";
+// The look is the home's: every dot is one square CELL on the screen's grid, on the checkerboard lattice, dithered by the same
+// blue-noise threshold, true black. The flat layers are made cell by cell with the home's own rule (layers.js ditherBody), so a
+// dot is where the home would put one; the 3D layers are even, thin and regular.
+//
+// The movement is a walk, not a spring. When you switch layer every dot, at its own moment (a wave from the centre, plus noise),
+// goes out, then walks to its place in the next layer along the shortest path (a straight line), a few cells at a time, dim,
+// and lights up with a flash when it arrives. Dot i of one layer is near dot i of the next (a sort by place), so the walks are short.
+// The dots live on the GPU: a position texture and a "from + progress" texture, updated every frame.
+//
+// The mouse: drag turns the 3D layers (the flat ones tilt and spring back), a click drops the wave.
+import { N, W, H, BODY, LAYERS, FLAT, CAMERA_D, rng, dust, scatter, assemble, gridContext, ditherBody, cubeBody, sphereBody, columnBody, rotation } from "./layers.js";
+import { cellPx, gapPx, gridAmount, dustKeep } from "./density.js";
+import { blueNoise } from "../raster.js";
 
 const html = document.documentElement;
 const canvas = document.getElementById("scene");
@@ -16,150 +21,203 @@ const ui = document.getElementById("ui");
 const slider = document.getElementById("pixel");
 const nameEl = document.getElementById("layer-name");
 const noEl = document.getElementById("layer-no");
-const hudEl = document.getElementById("hud");
+const hudEl = document.getElementById("hint");
+const refEl = document.getElementById("ref");
+const refBtn = document.getElementById("ref-btn");
 const params = new URLSearchParams(location.search);
 // (?still shows the reduced-motion version on demand: the dots jump to their places, nothing moves)
 const reduce = matchMedia("(prefers-reduced-motion: reduce)").matches || params.has("still");
-const D = 3.2; // the camera's distance: at z = 0 the screen's height is 2 world units
 
-// ------------------------------------------------------------------------------------------------ layers from the DOM and from pictures
-const dustArr = dust();
-let picture = null; // { bitmap, worldH }: the picture layer's source (a drawn one, or a dropped image)
+// ------------------------------------------------------------------------------------------------ the flat layers, drawn then dithered
+const bn = blueNoise(); // the home's threshold map (a few tens of ms, once)
+let wordmark = null; // the home's own SVG paths, read from ../index.html (one source for the wordmark)
+let picture = null; // a dropped image, or null for the drawn one
 
-function drawUI() {
-  const w = Math.max(1, innerWidth), h = Math.max(1, innerHeight);
+async function loadWordmark() {
+  try {
+    const doc = new DOMParser().parseFromString(await (await fetch(new URL("../index.html", import.meta.url))).text(), "text/html");
+    const ds = [...doc.querySelectorAll(".logo svg path[data-l]")].map((p) => p.getAttribute("d"));
+    if (ds.length) wordmark = ds;
+  } catch (err) {
+    console.warn("the home's wordmark could not be read; drawing letters instead", err);
+  }
+}
+
+const canvas2d = (w, h) => {
   const c = document.createElement("canvas");
   c.width = w;
   c.height = h;
-  const ctx = c.getContext("2d", { willReadFrequently: true });
-  ctx.fillStyle = "#000";
-  ctx.fillRect(0, 0, w, h);
-  ctx.textBaseline = "middle";
+  const x = c.getContext("2d", { willReadFrequently: true });
+  x.fillStyle = "#000";
+  x.fillRect(0, 0, w, h);
+  return [c, x];
+};
+/** cell (cx, cy), cy from the bottom → the bitmap's tone there (the bitmap is in device px, rows from the top) */
+const sampler = (img, ctx) => (cx, cy) => {
+  const px = Math.min(img.width - 1, Math.floor(cx * ctx.cell + ctx.cell / 2));
+  const py = Math.min(img.height - 1, Math.floor(img.height - (cy * ctx.cell + ctx.cell / 2)));
+  return img.data[(py * img.width + px) * 4] / 255;
+};
+
+function drawHome(ctx, dpr) {
+  const [, x] = canvas2d(ctx.viewW, ctx.viewH);
+  x.setTransform(dpr, 0, 0, dpr, 0, 0);
+  const cssW = ctx.viewW / dpr, cssH = ctx.viewH / dpr, w = Math.min(cssW * 0.74, 900), s = w / 90, h = 15.75 * s;
+  x.fillStyle = "#fff";
+  if (wordmark) {
+    x.translate((cssW - w) / 2, (cssH - h) / 2);
+    x.scale(s, s);
+    for (const d of wordmark) x.fill(new Path2D(d));
+  } else {
+    x.font = `700 ${h * 1.2}px ui-sans-serif, Helvetica, Arial, sans-serif`;
+    x.textAlign = "center";
+    x.textBaseline = "middle";
+    x.fillText("CRDZC", cssW / 2, cssH / 2);
+  }
+  return x.getImageData(0, 0, ctx.viewW, ctx.viewH);
+}
+
+function drawUI(ctx, dpr) {
+  const [, x] = canvas2d(ctx.viewW, ctx.viewH);
+  x.setTransform(dpr, 0, 0, dpr, 0, 0);
+  const line = ctx.cell / dpr; // a line is exactly one cell thick
   const regions = [];
+  const card = ui.querySelector(".card").getBoundingClientRect();
+  x.lineWidth = line;
+  x.fillStyle = "rgba(255,255,255,0.14)"; // the panel's fill: a dither
+  x.strokeStyle = "#fff";
+  x.beginPath();
+  x.roundRect(card.left + line / 2, card.top + line / 2, card.width - line, card.height - line, 14);
+  x.fill();
+  x.stroke();
+  x.textBaseline = "middle";
   for (const el of ui.querySelectorAll("[data-id]")) {
-    const cs = getComputedStyle(el), er = el.getBoundingClientRect();
-    const range = document.createRange();
+    const cs = getComputedStyle(el), er = el.getBoundingClientRect(), range = document.createRange();
     range.selectNodeContents(el);
     const tr = range.getBoundingClientRect();
-    const tone = Number(el.dataset.tone || 1);
-    ctx.font = `${cs.fontStyle} ${cs.fontWeight} ${cs.fontSize} ${cs.fontFamily}`;
-    if ("letterSpacing" in ctx) ctx.letterSpacing = cs.letterSpacing === "normal" ? "0px" : cs.letterSpacing;
+    x.font = `${cs.fontStyle} ${cs.fontWeight} ${cs.fontSize} ${cs.fontFamily}`;
+    if ("letterSpacing" in x) x.letterSpacing = cs.letterSpacing === "normal" ? "0px" : cs.letterSpacing;
     if (el.tagName === "BUTTON") {
-      ctx.lineWidth = 1.5;
-      ctx.strokeStyle = `rgba(255,255,255,${tone})`;
-      ctx.fillStyle = "rgba(255,255,255,0.08)";
-      ctx.beginPath();
-      ctx.roundRect(er.left + 0.75, er.top + 0.75, er.width - 1.5, er.height - 1.5, er.height / 2);
-      ctx.fill();
-      ctx.stroke();
+      x.beginPath();
+      x.roundRect(er.left + line / 2, er.top + line / 2, er.width - line, er.height - line, er.height / 2);
+      x.fillStyle = "rgba(255,255,255,0.14)";
+      x.fill();
+      x.stroke();
     }
-    ctx.fillStyle = `rgba(255,255,255,${tone})`;
-    ctx.fillText(el.textContent, tr.left, tr.top + tr.height / 2);
-    regions.push({ id: Number(el.dataset.id), x: Math.floor(er.left), y: Math.floor(er.top), w: Math.ceil(er.width), h: Math.ceil(er.height) });
+    x.fillStyle = "#fff";
+    x.fillText(el.textContent, tr.left, tr.top + tr.height / 2);
+    regions.push({ id: Number(el.dataset.id), x0: er.left * dpr, y0: er.top * dpr, x1: er.right * dpr, y1: er.bottom * dpr });
   }
-  return { bitmap: ctx.getImageData(0, 0, w, h), regions };
+  const img = x.getImageData(0, 0, ctx.viewW, ctx.viewH);
+  const idAt = (cx, cy) => {
+    const px = cx * ctx.cell + ctx.cell / 2, py = ctx.viewH - (cy * ctx.cell + ctx.cell / 2);
+    for (const g of regions) if (px >= g.x0 && px < g.x1 && py >= g.y0 && py < g.y1) return g.id;
+    return 0;
+  };
+  return { img, idAt };
 }
 
 /** The picture drawn when nothing was dropped: a bright core in a dark net, a flare, stars (after the references, not a copy). */
-function drawCosmos() {
-  const S = 640, c = document.createElement("canvas");
-  c.width = c.height = S;
-  const ctx = c.getContext("2d", { willReadFrequently: true });
+function drawCosmos(S = 640) {
+  const [c, x] = canvas2d(S, S);
   const r = rng(9), cx = S / 2, cy = S * 0.52, TAU = Math.PI * 2;
-  ctx.fillStyle = "#000";
-  ctx.fillRect(0, 0, S, S);
-  const g = ctx.createRadialGradient(cx, cy, 0, cx, cy, S * 0.46);
+  const g = x.createRadialGradient(cx, cy, 0, cx, cy, S * 0.46);
   g.addColorStop(0, "rgba(255,255,255,1)");
   g.addColorStop(0.18, "rgba(255,255,255,1)");
-  g.addColorStop(0.45, "rgba(255,255,255,0.45)");
+  g.addColorStop(0.45, "rgba(255,255,255,0.5)");
   g.addColorStop(1, "rgba(255,255,255,0)");
-  ctx.fillStyle = g;
-  ctx.fillRect(0, 0, S, S);
-  ctx.strokeStyle = "#000";
-  ctx.lineCap = "round";
+  x.fillStyle = g;
+  x.fillRect(0, 0, S, S);
+  x.strokeStyle = "#000";
+  x.lineCap = "round";
   for (const [rx, ry, rot, lw] of [[230, 175, -0.35, 24], [200, 230, 0.5, 18], [250, 150, 1.2, 14]]) {
-    ctx.save();
-    ctx.translate(cx, cy);
-    ctx.rotate(rot);
-    ctx.lineWidth = lw;
-    ctx.beginPath();
-    ctx.ellipse(0, 0, rx, ry, 0, 0, TAU);
-    ctx.stroke();
-    ctx.restore();
+    x.save();
+    x.translate(cx, cy);
+    x.rotate(rot);
+    x.lineWidth = lw;
+    x.beginPath();
+    x.ellipse(0, 0, rx, ry, 0, 0, TAU);
+    x.stroke();
+    x.restore();
   }
-  ctx.lineWidth = 8;
+  x.lineWidth = 8;
   for (let i = 0; i < 9; i++) {
     const a = r() * TAU;
-    ctx.beginPath();
-    ctx.moveTo(cx + Math.cos(a) * 110, cy + Math.sin(a) * 110);
-    ctx.lineTo(cx + Math.cos(a) * 270, cy + Math.sin(a) * 270);
-    ctx.stroke();
+    x.beginPath();
+    x.moveTo(cx + Math.cos(a) * 110, cy + Math.sin(a) * 110);
+    x.lineTo(cx + Math.cos(a) * 270, cy + Math.sin(a) * 270);
+    x.stroke();
   }
-  const bar = (x, y, w, h, horizontal) => {
-    const gr = horizontal ? ctx.createLinearGradient(x, 0, x + w, 0) : ctx.createLinearGradient(0, y, 0, y + h);
+  const bar = (bx, by, bw, bh, horizontal) => {
+    const gr = horizontal ? x.createLinearGradient(bx, 0, bx + bw, 0) : x.createLinearGradient(0, by, 0, by + bh);
     gr.addColorStop(0, "rgba(255,255,255,0)");
     gr.addColorStop(0.5, "rgba(255,255,255,0.9)");
     gr.addColorStop(1, "rgba(255,255,255,0)");
-    ctx.fillStyle = gr;
-    ctx.fillRect(x, y, w, h);
+    x.fillStyle = gr;
+    x.fillRect(bx, by, bw, bh);
   };
   bar(30, cy - 1.5, S - 60, 3, true);
   bar(cx - 1.5, 30, 3, S - 60, false);
   for (let i = 0; i < 260; i++) {
-    ctx.fillStyle = `rgba(255,255,255,${0.35 + 0.65 * r()})`;
-    ctx.beginPath();
-    ctx.arc(r() * S, r() * S, 0.6 + Math.pow(r(), 3) * 2.2, 0, TAU);
-    ctx.fill();
+    x.fillStyle = `rgba(255,255,255,${0.35 + 0.65 * r()})`;
+    x.beginPath();
+    x.arc(r() * S, r() * S, 0.6 + Math.pow(r(), 3) * 2.2, 0, TAU);
+    x.fill();
   }
-  return { bitmap: ctx.getImageData(0, 0, S, S), worldH: 1.7 };
+  return c;
 }
-
-/** A dropped image becomes the picture: fitted, turned to grey, its levels stretched. It stays on this machine. */
+/** A dropped image becomes the picture: grey, its levels stretched. It stays on this machine. */
 async function pictureFromFile(file) {
   const img = await createImageBitmap(file);
-  const k = Math.min(900 / img.width, 900 / img.height, 1);
-  const w = Math.max(1, Math.round(img.width * k)), h = Math.max(1, Math.round(img.height * k));
-  const c = document.createElement("canvas");
-  c.width = w;
-  c.height = h;
-  const ctx = c.getContext("2d", { willReadFrequently: true });
-  ctx.drawImage(img, 0, 0, w, h);
-  const bm = ctx.getImageData(0, 0, w, h), d = bm.data;
+  const k = Math.min(1000 / img.width, 1000 / img.height, 1);
+  const [c, x] = canvas2d(Math.max(1, Math.round(img.width * k)), Math.max(1, Math.round(img.height * k)));
+  x.drawImage(img, 0, 0, c.width, c.height);
+  const bm = x.getImageData(0, 0, c.width, c.height), d = bm.data;
   let lo = 255, hi = 0;
-  for (let i = 0; i < w * h; i++) {
-    const l = 0.2126 * d[i * 4] + 0.7152 * d[i * 4 + 1] + 0.0722 * d[i * 4 + 2];
-    if (l < lo) lo = l;
-    if (l > hi) hi = l;
-  }
-  for (let i = 0; i < w * h; i++) {
-    const l = 0.2126 * d[i * 4] + 0.7152 * d[i * 4 + 1] + 0.0722 * d[i * 4 + 2];
-    const v = Math.max(0, Math.min(255, ((l - lo) / Math.max(1, hi - lo)) * 255));
+  const lum = (i) => 0.2126 * d[i * 4] + 0.7152 * d[i * 4 + 1] + 0.0722 * d[i * 4 + 2];
+  for (let i = 0; i < c.width * c.height; i++) { const l = lum(i); if (l < lo) lo = l; if (l > hi) hi = l; }
+  for (let i = 0; i < c.width * c.height; i++) {
+    const v = Math.max(0, Math.min(255, ((lum(i) - lo) / Math.max(1, hi - lo)) * 255));
     d[i * 4] = d[i * 4 + 1] = d[i * 4 + 2] = v;
     d[i * 4 + 3] = 255;
   }
-  const scale = Math.min(1.7 / h, 2.6 / w);
-  return { bitmap: bm, worldH: h * scale };
+  x.putImageData(bm, 0, 0);
+  return c;
+}
+function drawPicture(ctx, dpr) {
+  const src = picture || (picture = drawCosmos());
+  const [, x] = canvas2d(ctx.viewW, ctx.viewH);
+  const cssH = ctx.viewH / dpr, cssW = ctx.viewW / dpr, k = Math.min((cssH * 0.85) / src.height, (cssW * 0.9) / src.width) * dpr;
+  const w = src.width * k, h = src.height * k;
+  x.drawImage(src, (ctx.viewW - w) / 2, (ctx.viewH - h) / 2, w, h);
+  return x.getImageData(0, 0, ctx.viewW, ctx.viewH);
 }
 
+// ------------------------------------------------------------------------------------------------ the layers, built for the screen's grid
+let G = { dpr: 1, ctx: gridContext({ viewW: 800, viewH: 600, cell: 3, bn }), pixel: 0 }; // (set by resize)
 const cache = new Map();
 function build(name) {
+  const { ctx, dpr } = G;
   switch (name) {
+    case "home": return ditherBody(sampler(drawHome(ctx, dpr), ctx), ctx, { solid: 2 }, 11); // the home's own: lattice, DENS_L 0.72
     case "ui": {
-      const { bitmap, regions } = drawUI();
-      return bitmapBody(bitmap, { worldH: 2, count: 56000, thr: 0.2, baseTone: 0.92, regions, haze: [0.008, 0.3] }, 11);
+      const { img, idAt } = drawUI(ctx, dpr);
+      return ditherBody(sampler(img, ctx), ctx, { solid: 0.55, idAt }, 12); // crisp text and lines, a dithered fill
     }
-    case "cosmos": {
-      picture ||= drawCosmos();
-      return bitmapBody(picture.bitmap, { worldH: picture.worldH, count: 70000, gamma: 1.6, thr: 0.03, depth: 0.3, baseTone: 0.8, haze: [0.01, 0.4] }, 12);
-    }
-    case "cube": return cubeBody();
-    case "sphere": return sphereBody();
-    case "column": return columnBody();
+    case "picture": return ditherBody(sampler(drawPicture(ctx, dpr), ctx), ctx, { dens: 1, lattice: false, solid: 2, depth: 0.2 }, 13); // tone is density
+    case "cube": return cubeBody(ctx);
+    case "sphere": return sphereBody(ctx);
+    case "column": return columnBody(ctx);
     default: throw new Error(`no layer ${name}`);
   }
 }
+let dustCache = null;
 const layerData = (name) => {
-  if (!cache.has(name)) cache.set(name, assemble(build(name), dustArr));
+  const { ctx } = G;
+  if (!cache.has(name)) {
+    if (!dustCache || dustCache.aspect !== ctx.aspect) dustCache = { aspect: ctx.aspect, a: dust(ctx.aspect) };
+    cache.set(name, assemble(build(name), dustCache.a));
+  }
   return cache.get(name);
 };
 
@@ -170,126 +228,137 @@ void main() {
   gl_Position = vec4(p * 2.0 - 1.0, 0.0, 1.0);
 }`;
 
-// each dot is a spring toward its target; it leaves the old target at its own moment
+// each dot: waits for its moment, goes out, walks a straight line to its place a few cells at a time, lights up when it arrives.
+// from.w is its progress: < 0 held where it is, 0 following the old layer, (0, 1) walking, 1 → 2 the flash after arriving, 2 settled
 const UPDATE = `#version 300 es
 precision highp float;
 precision highp int;
-uniform sampler2D tPos, tVel, tPrev, tNext;
+uniform sampler2D tPos, tFrom, tPrev, tNext;
 uniform ivec2 uTex;
-uniform float uDt, uTime, uSince, uBody, uStill;
+uniform float uDt, uSince, uBody, uStill, uReset, uCellWorld;
 uniform vec2 uClick;
 uniform mat3 uRotPrev, uRotNext;
 layout(location = 0) out vec4 oPos;
-layout(location = 1) out vec4 oVel;
+layout(location = 1) out vec4 oFrom;
 float h11(float n) { return fract(sin(n * 12.9898) * 43758.5453); }
 void main() {
   ivec2 tc = ivec2(gl_FragCoord.xy);
   float fi = float(tc.x + tc.y * uTex.x);
   vec4 pos = texelFetch(tPos, tc, 0);
-  vec4 vel = texelFetch(tVel, tc, 0);
+  vec4 fr = texelFetch(tFrom, tc, 0);
   vec4 pv = texelFetch(tPrev, tc, 0);
   vec4 nx = texelFetch(tNext, tc, 0);
   bool body = fi < uBody;
   vec3 wp = body ? uRotPrev * pv.xyz : pv.xyz;
   vec3 wn = body ? uRotNext * nx.xyz : nx.xyz;
   float h1 = h11(fi), h2 = h11(fi + 17.3), h3 = h11(fi + 41.7);
-  // the wave from the click reaches each dot's new place, and every dot adds a moment of its own
-  float delay = distance(wn.xy, uClick) * 0.34 + h1 * 0.5;
-  bool go = uSince > delay;
-  vec3 target = go ? wn : wp;
-  float w = go ? nx.w : pv.w;
-  if (uStill > 0.5) { oPos = vec4(target, w); oVel = vec4(0.0); return; }
-  vec3 d = target - pos.xyz;
-  float dist = length(d);
-  float k = 55.0 * (0.8 + 0.4 * h2);                                  // its own stiffness
-  float c = 2.0 * 0.55 * sqrt(k) * (0.85 + 0.3 * h3);                  // its own damping: a little overshoot, then it settles
-  vec3 acc = k * d - c * vel.xyz;
-  vec3 n = vec3(sin(pos.y * 2.1 + uTime * 0.8 + h1 * 6.28) + sin(pos.z * 1.7 - uTime),
-                sin(pos.z * 2.3 + uTime * 0.6) + sin(pos.x * 1.9 + uTime * 0.9 + h2 * 6.28),
-                sin(pos.x * 2.7 - uTime * 0.7) + sin(pos.y * 1.5 + uTime * 0.5));
-  acc += cross(d / (dist + 1e-3), n) * 16.0 * smoothstep(0.05, 0.9, dist); // far from home it swirls: the path curves
-  vec3 v = vel.xyz + acc * uDt;
-  float sp = length(v);
-  if (sp > 4.0) v *= 4.0 / sp;
-  oPos = vec4(pos.xyz + v * uDt, w);
-  oVel = vec4(v, 0.0);
+  if (uStill > 0.5) { oPos = vec4(wn, nx.w); oFrom = vec4(wn, 2.0); return; }
+  float p = fr.w;
+  vec3 from = fr.xyz;
+  vec4 outPos = pos;
+  if (uReset > 0.5) p = (p >= 1.0) ? 0.0 : -1.0;   // a new switch: the arrived follow the old layer, the walkers stay where they are
+  if (p <= 0.0) {
+    bool follow = p > -0.5;
+    vec3 hold = follow ? wp : pos.xyz;
+    float wcur = follow ? pv.w : pos.w;
+    float delay = distance(wn.xy, uClick) * 0.34 + h1 * 0.5;   // a wave from the switch, and a moment of each dot's own
+    if (uSince > delay) {
+      from = hold;
+      outPos = vec4(hold, nx.w);
+      p = (distance(wn, hold) < 0.5 * uCellWorld) ? 2.0 : 0.0001; // already home (the field, a dot that does not move): no walk
+    } else outPos = vec4(hold, wcur);
+  } else if (p < 1.0) {
+    float cells = length(wn - from) / uCellWorld;
+    float T = clamp(cells / 110.0, 0.45, 1.6) * (0.85 + 0.3 * h2);          // the farther, the longer, but never long
+    p += uDt / T;
+    float K = max(1.0, floor(T * 18.0));                                      // 18 hops a second: a few cells at a time
+    float pq = min(1.0, floor(min(p, 1.0) * K + h3) / K);                     // (each dot hops on its own beat)
+    outPos = vec4(mix(from, wn, pq), nx.w);                                  // the shortest path: a straight line
+    if (p >= 1.0) p = 1.0;
+  } else {
+    p = min(2.0, p + uDt / 0.5);
+    outPos = vec4(wn, nx.w);                                                  // arrived: it follows the layer (a turning cube turns)
+  }
+  oPos = outPos;
+  oFrom = vec4(from, p);
 }`;
 
 const DRAW_V = `#version 300 es
 precision highp float;
 precision highp int;
-uniform sampler2D tPos, tVel;
+uniform sampler2D tPos, tFrom;
 uniform ivec2 uTex;
-uniform float uYaw, uPitch, uD, uAspect, uTime, uDpr, uHover, uPtrE, uCell, uKeep, uSnap, uAlpha, uPower, uDust, uBody;
-uniform vec2 uView, uPtr;
-uniform vec3 uShock;
-out float vA;
+uniform float uYaw, uPitch, uD, uAspect, uTime, uHover, uPtrE, uCell, uGap, uBody, uDustKeep, uFog, uWaveT;
+uniform vec2 uView, uPtr, uWave;
+out vec3 vCol;
 float h11(float n) { return fract(sin(n * 12.9898) * 43758.5453); }
+float pulse(vec2 d, float t) { // a ring that runs out, thins and fades
+  return t < 0.0 ? 0.0 : exp(-pow((length(d) - t * 1.5) / 0.1, 2.0)) * exp(-t * 1.3);
+}
 void main() {
   int id = gl_VertexID;
   ivec2 tc = ivec2(id % uTex.x, id / uTex.x);
   vec4 s = texelFetch(tPos, tc, 0);
-  vec3 vel = texelFetch(tVel, tc, 0).xyz;
+  float p = texelFetch(tFrom, tc, 0).w;
   float fid = floor(s.w);
   float tone = s.w - fid;
   float fi = float(id);
   float h1 = h11(fi), h2 = h11(fi + 17.3), h3 = h11(fi + 41.7);
-  if (h1 > uKeep) { gl_Position = vec4(2.0, 2.0, 2.0, 1.0); gl_PointSize = 0.0; vA = 0.0; return; } // thinned by rank
-  vec3 p = s.xyz + 0.004 * vec3(sin(uTime * 0.9 + h1 * 6.283), sin(uTime * 1.1 + h2 * 6.283), sin(uTime * 0.7 + h3 * 6.283));
+  bool field = fi >= uBody;
+  if (tone < 0.01 || (field && h1 > uDustKeep)) { gl_Position = vec4(2.0, 2.0, 2.0, 1.0); gl_PointSize = 0.0; vCol = vec3(0.0); return; }
   float cy = cos(uYaw), sy = sin(uYaw), cx = cos(uPitch), sx = sin(uPitch);
-  vec3 q = vec3(cy * p.x + sy * p.z, p.y, -sy * p.x + cy * p.z);
+  vec3 q = vec3(cy * s.x + sy * s.z, s.y, -sy * s.x + cy * s.z);
   q = vec3(q.x, cx * q.y - sx * q.z, sx * q.y + cx * q.z);
-  float depth = uD - q.z;
-  vec2 ndc = vec2(q.x / uAspect, q.y) * uD / depth;
+  vec2 ndc = vec2(q.x / uAspect, q.y) * uD / (uD - q.z);
   vec2 a = vec2(uAspect, 1.0);
   // the pointer: a hole in the dots with a push round it; moving it stirs more
   vec2 dd = (ndc - uPtr) * a;
   float r = length(dd);
-  ndc += (dd / (r + 1e-4)) * exp(-pow(r / 0.2, 2.0)) * (0.05 + 0.1 * uPtrE) / a;
-  float hole = 1.0 - 0.9 * exp(-pow(r / 0.05, 2.0));
-  // the click: a ring that runs out from it
-  vec2 sd = (ndc - uShock.xy) * a;
-  float ring = exp(-pow((length(sd) - uShock.z * 1.5) / 0.14, 2.0)) * exp(-uShock.z * 1.6);
-  ndc += (sd / (length(sd) + 1e-4)) * ring * 0.06 / a;
-  float hot = (fid > 0.5 && abs(fid - uHover) < 0.5) ? 1.0 : 0.0;
-  float speed = length(vel);
-  tone = clamp(tone + 0.3 * hot + 0.45 * smoothstep(0.4, 2.5, speed), 0.0, 1.0); // a dot in flight glows
-  tone = pow(tone, uPower);                                                      // (lifts the dim ones at the grid end)
-  float tw = 0.78 + 0.22 * sin(uTime * (0.8 + 2.2 * h2) + h3 * 6.283);
-  float fog = clamp(0.55 + 0.35 * q.z, 0.35, 1.0);
+  ndc += (dd / (r + 1e-4)) * exp(-pow(r / 0.14, 2.0)) * (0.03 + 0.07 * uPtrE) / a;
+  float hole = step(0.28, 1.0 - exp(-pow(r / 0.035, 2.0)));
+  // the wave: two pulses from the click, pushing and lighting what they cross
+  vec2 wd = (ndc - uWave) * a;
+  float ring = pulse(wd, uWaveT) + 0.6 * pulse(wd, uWaveT - 0.2);
+  ndc += (wd / (length(wd) + 1e-4)) * ring * 0.035 / a;
+  // brightness: the home's flicker, a walker dim, a flash on arriving, a hovered element steady
+  float flick = 0.5 + 0.5 * sin(uTime * (0.6 + 1.8 * h2) + h3 * 6.283);
+  float b = tone * (1.0 - 0.4 * (1.0 - sqrt(flick)));
+  float fade = smoothstep(0.0, 0.12, p);
+  float blink = 1.0 - (1.0 - fade) * step(0.5, fract(p * 90.0)); // going out: it stutters, then dims
+  float walking = step(0.0001, p) * (1.0 - step(1.0, p));
+  b = mix(b, b * 0.55 * blink, walking * step(0.0, p));
+  float flash = step(1.0, p) * (1.0 - step(2.0, p)) * (1.0 - (p - 1.0));
+  b = min(1.0, b + 0.9 * flash * flash);
+  if (fid > 0.5 && abs(fid - uHover) < 0.5) b = max(b, 0.95);
+  b = min(1.0, b + 0.55 * min(ring, 1.0));
+  b *= hole * mix(1.0, clamp(0.72 + 0.55 * q.z, 0.4, 1.0), uFog);
+  vCol = (field ? vec3(0.9, 0.94, 1.0) * 0.4 : vec3(0.94, 0.935, 0.9)) * b;
+  // the screen's grid: a dot is the whole cell it falls in, and off the lattice it steps onto it (the home's checkerboard)
   vec2 px = (ndc * 0.5 + 0.5) * uView;
-  px = mix(px, (floor(px / uCell) + 0.5) * uCell, uSnap);
-  ndc = px / uView * 2.0 - 1.0;
-  float fine = (0.9 + 1.7 * tone) * uDpr * clamp(uD / depth, 0.6, 1.8) * (1.0 + 0.25 * hot);
-  float coarse = max(1.0, uCell - max(1.0, 0.09 * uCell));
-  gl_PointSize = mix(fine, coarse, uSnap);
+  vec2 c = floor(px / uCell);
+  if (!field && tone < 0.995 && mod(c.x + c.y, 2.0) > 0.5) c.x += (h2 < 0.5 ? -1.0 : 1.0);
+  ndc = ((c + 0.5) * uCell / uView) * 2.0 - 1.0;
+  gl_PointSize = uCell - uGap;
   gl_Position = vec4(ndc, 0.0, 1.0);
-  vA = tone * tw * fog * hole * uAlpha * (fi >= uBody ? uDust : 1.0);
 }`;
 
 const DRAW_F = `#version 300 es
 precision highp float;
-uniform float uSquare;
-in float vA;
+in vec3 vCol;
 out vec4 o;
-void main() {
-  vec2 c = gl_PointCoord * 2.0 - 1.0;
-  float d = mix(length(c), max(abs(c.x), abs(c.y)), uSquare);
-  float a = smoothstep(1.0, mix(0.35, 0.9, uSquare), d) * vA;
-  o = vec4(0.94, 0.935, 0.9, a);
-}`;
+void main() { o = vec4(vCol, 1.0); }`;
 
 // the screen's own grid, faintly, behind the dots: one tile per cell, each with a slow life of its own
 const GRID_F = `#version 300 es
 precision highp float;
-uniform float uCell, uGrid, uTime;
+uniform float uCell, uGap, uGrid, uTime;
 out vec4 o;
 float h21(vec2 p) { return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453); }
 void main() {
   vec2 cell = floor(gl_FragCoord.xy / uCell);
-  vec2 f = fract(gl_FragCoord.xy / uCell);
-  float gap = max(1.0, 0.09 * uCell) / uCell * 0.5;
-  float inside = step(gap, f.x) * step(gap, f.y) * step(f.x, 1.0 - gap) * step(f.y, 1.0 - gap);
+  vec2 f = gl_FragCoord.xy - cell * uCell;
+  float g = uGap * 0.5;
+  float inside = step(g, f.x) * step(g, f.y) * step(f.x, uCell - g) * step(f.y, uCell - g);
   float life = 0.7 + 0.3 * sin(uTime * (0.4 + h21(cell) * 1.2) + h21(cell + 7.0) * 6.283);
   o = vec4(0.94, 0.935, 0.9, 0.06 * uGrid * inside * life);
 }`;
@@ -333,43 +402,47 @@ function start() {
     gl.bindTexture(gl.TEXTURE_2D, t);
     gl.texSubImage2D(gl.TEXTURE_2D, 0, 0, 0, W, H, gl.RGBA, gl.FLOAT, data);
   };
-  const start0 = assemble(scatter(), dustArr);
+
+  // ---- the world's state
+  let read = 0, cur = 1; // state[read] is the latest; targets[cur] is the next layer, targets[1 − cur] the previous
+  let prevName = "scatter", nextName = LAYERS[0], layerIdx = 0;
+  let time = 0, since = 0, reset = 1, waveT = 9, wave = [9, 9], click = [0, 0];
+  let hover = 0, pixel = Math.min(1, Math.max(0, Number(params.get("pixel")) || 0));
+  let refOn = false, paused = false;
+  const ptr = { x: 9, y: 9, sx: 9, sy: 9, e: 0, has: false };
+  const cam = { yaw: 0, pitch: 0, vyaw: 0, vpitch: 0 };
+  const drag = { on: false, x: 0, y: 0, sx: 0, sy: 0, t0: 0, moved: false };
+
+  function resize() {
+    const dpr = Math.min(devicePixelRatio || 1, 2);
+    const viewW = Math.max(1, Math.round(innerWidth * dpr)), viewH = Math.max(1, Math.round(innerHeight * dpr));
+    canvas.width = viewW;
+    canvas.height = viewH;
+    G = { dpr, pixel, ctx: gridContext({ viewW, viewH, cell: cellPx(pixel, dpr), bn }) };
+    cache.clear();
+  }
+  resize();
+
+  const scatterArr = () => assemble(scatter(), dust(G.ctx.aspect));
+  const start0 = scatterArr();
   const state = [0, 1].map(() => {
-    const pos = f32(start0), vel = f32(new Float32Array(N * 4));
+    const pos = f32(start0), from = f32(new Float32Array(N * 4));
     const fbo = gl.createFramebuffer();
     gl.bindFramebuffer(gl.FRAMEBUFFER, fbo);
     gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, pos, 0);
-    gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT1, gl.TEXTURE_2D, vel, 0);
+    gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT1, gl.TEXTURE_2D, from, 0);
     gl.drawBuffers([gl.COLOR_ATTACHMENT0, gl.COLOR_ATTACHMENT1]);
     if (gl.checkFramebufferStatus(gl.FRAMEBUFFER) !== gl.FRAMEBUFFER_COMPLETE) throw new Error("incomplete framebuffer");
-    return { pos, vel, fbo };
+    return { pos, from, fbo };
   });
-  const targets = [f32(start0), f32(layerData("ui"))];
+  const targets = [f32(start0), f32(new Float32Array(N * 4))];
   gl.bindFramebuffer(gl.FRAMEBUFFER, null);
-
-  // ---- the world's state
-  let read = 0, cur = 1; // state[read] is the latest; targets[cur] is the next layer, targets[1 - cur] the previous
-  let prevName = "scatter", nextName = "ui", layerIdx = 0;
-  let time = 0, since = 0, shockT = 9, click = [0, 0], shockNdc = [9, 9];
-  let hover = 0, pixel = Math.min(1, Math.max(0, Number(params.get("pixel")) || 0));
-  const ptr = { x: 9, y: 9, sx: 9, sy: 9, e: 0, has: false };
-  const cam = { yaw: 0, pitch: 0 };
-  let dpr = 1, cw = 1, ch = 1;
-
-  function resize() {
-    dpr = Math.min(devicePixelRatio || 1, 2);
-    cw = Math.max(1, Math.round(innerWidth * dpr));
-    ch = Math.max(1, Math.round(innerHeight * dpr));
-    canvas.width = cw;
-    canvas.height = ch;
-  }
 
   function simulate(dt) {
     const e = Math.min(dt, 1 / 30);
     time += reduce ? 0 : e;
     since += e;
-    shockT += e;
-    // pointer: smoothed, and the speed of it is the energy
+    waveT += e;
     if (ptr.has) {
       const lx = ptr.sx, ly = ptr.sy, k = 1 - Math.exp(-e * 16);
       ptr.sx = ptr.sx > 8 ? ptr.x : ptr.sx + (ptr.x - ptr.sx) * k;
@@ -377,9 +450,21 @@ function start() {
       ptr.e = Math.min(1, ptr.e + Math.min(Math.hypot(ptr.sx - lx, ptr.sy - ly) / Math.max(e, 1e-3), 6) * e * 0.5);
     }
     ptr.e *= Math.exp(-e / 1.4);
-    const cyaw = ptr.has && !reduce ? ptr.sx * 0.1 : 0, cpitch = ptr.has && !reduce ? -ptr.sy * 0.07 : 0;
-    cam.yaw += (cyaw - cam.yaw) * (1 - Math.exp(-e * 3));
-    cam.pitch += (cpitch - cam.pitch) * (1 - Math.exp(-e * 3));
+    // the drag turns the 3D layers (and keeps turning a little); the flat ones tilt and spring back when you let go
+    if (!drag.on) {
+      if (FLAT.has(nextName)) {
+        const k = 1 - Math.exp(-e * 6);
+        cam.yaw -= cam.yaw * k;
+        cam.pitch -= cam.pitch * k;
+        cam.vyaw = cam.vpitch = 0;
+      } else {
+        cam.yaw += cam.vyaw * e;
+        cam.pitch = Math.max(-1.4, Math.min(1.4, cam.pitch + cam.vpitch * e));
+        const d = Math.exp(-e * 2.2);
+        cam.vyaw *= d;
+        cam.vpitch *= d;
+      }
+    }
 
     const src = state[read], dst = state[1 - read];
     gl.bindFramebuffer(gl.FRAMEBUFFER, dst.fbo);
@@ -392,102 +477,126 @@ function start() {
       gl.uniform1i(upd.u[name], unit);
     };
     bind(0, src.pos, "tPos");
-    bind(1, src.vel, "tVel");
+    bind(1, src.from, "tFrom");
     bind(2, targets[1 - cur], "tPrev");
     bind(3, targets[cur], "tNext");
     gl.uniform2i(upd.u.uTex, W, H);
     gl.uniform1f(upd.u.uDt, e);
-    gl.uniform1f(upd.u.uTime, time);
     gl.uniform1f(upd.u.uSince, since);
     gl.uniform1f(upd.u.uBody, BODY);
     gl.uniform1f(upd.u.uStill, reduce ? 1 : 0);
+    gl.uniform1f(upd.u.uReset, reset);
+    gl.uniform1f(upd.u.uCellWorld, G.ctx.cellWorld);
     gl.uniform2f(upd.u.uClick, click[0], click[1]);
     gl.uniformMatrix3fv(upd.u.uRotPrev, false, rotation(prevName, time));
     gl.uniformMatrix3fv(upd.u.uRotNext, false, rotation(nextName, time));
     gl.drawArrays(gl.TRIANGLES, 0, 3);
+    reset = 0;
     read = 1 - read;
   }
 
   function draw() {
-    const s = pixelSetting(pixel);
+    const { ctx } = G, cell = ctx.cell, gap = gapPx(cell), grid = gridAmount(pixel);
     gl.bindFramebuffer(gl.FRAMEBUFFER, null);
-    gl.viewport(0, 0, cw, ch);
+    gl.viewport(0, 0, ctx.viewW, ctx.viewH);
     gl.clearColor(0, 0, 0, 1);
     gl.clear(gl.COLOR_BUFFER_BIT);
     gl.enable(gl.BLEND);
-    gl.blendFunc(gl.SRC_ALPHA, gl.ONE);
-    const cell = Math.max(2, s.cell * dpr);
-    if (s.grid > 0 && params.get("gridlines") !== "0") {
+    if (grid > 0 && params.get("gridlines") !== "0") {
+      gl.blendEquation(gl.FUNC_ADD);
+      gl.blendFunc(gl.SRC_ALPHA, gl.ONE);
       gl.useProgram(grd.p);
       gl.uniform1f(grd.u.uCell, cell);
-      gl.uniform1f(grd.u.uGrid, s.grid);
+      gl.uniform1f(grd.u.uGap, gap);
+      gl.uniform1f(grd.u.uGrid, grid);
       gl.uniform1f(grd.u.uTime, time);
       gl.drawArrays(gl.TRIANGLES, 0, 3);
     }
+    gl.blendEquation(gl.MAX); // a cell is lit or it is not: two dots in one cell do not add up
+    gl.blendFunc(gl.ONE, gl.ONE);
     gl.useProgram(drw.p);
     gl.activeTexture(gl.TEXTURE0);
     gl.bindTexture(gl.TEXTURE_2D, state[read].pos);
     gl.uniform1i(drw.u.tPos, 0);
     gl.activeTexture(gl.TEXTURE1);
-    gl.bindTexture(gl.TEXTURE_2D, state[read].vel);
-    gl.uniform1i(drw.u.tVel, 1);
+    gl.bindTexture(gl.TEXTURE_2D, state[read].from);
+    gl.uniform1i(drw.u.tFrom, 1);
     gl.uniform2i(drw.u.uTex, W, H);
-    gl.uniform1f(drw.u.uYaw, cam.yaw);
-    gl.uniform1f(drw.u.uPitch, cam.pitch);
-    gl.uniform1f(drw.u.uD, D);
-    gl.uniform1f(drw.u.uAspect, cw / ch);
+    gl.uniform1f(drw.u.uYaw, FLAT.has(nextName) ? Math.max(-0.45, Math.min(0.45, cam.yaw)) : cam.yaw);
+    gl.uniform1f(drw.u.uPitch, FLAT.has(nextName) ? Math.max(-0.45, Math.min(0.45, cam.pitch)) : cam.pitch);
+    gl.uniform1f(drw.u.uD, CAMERA_D);
+    gl.uniform1f(drw.u.uAspect, ctx.aspect);
     gl.uniform1f(drw.u.uTime, time);
-    gl.uniform1f(drw.u.uDpr, dpr);
     gl.uniform1f(drw.u.uHover, nextName === "ui" ? hover : 0);
     gl.uniform1f(drw.u.uPtrE, ptr.e);
     gl.uniform1f(drw.u.uCell, cell);
-    gl.uniform1f(drw.u.uPower, s.power);
-    gl.uniform1f(drw.u.uDust, s.dust);
+    gl.uniform1f(drw.u.uGap, gap);
     gl.uniform1f(drw.u.uBody, BODY);
-    gl.uniform1f(drw.u.uKeep, s.keep);
-    gl.uniform1f(drw.u.uSnap, s.snap);
-    gl.uniform1f(drw.u.uSquare, s.square);
-    gl.uniform1f(drw.u.uAlpha, 0.55 * s.gain);
-    gl.uniform2f(drw.u.uView, cw, ch);
+    gl.uniform1f(drw.u.uDustKeep, dustKeep(ctx.cols, ctx.rows, N - BODY));
+    gl.uniform1f(drw.u.uFog, FLAT.has(nextName) ? 0 : 1);
+    gl.uniform1f(drw.u.uWaveT, waveT);
+    gl.uniform2f(drw.u.uView, ctx.viewW, ctx.viewH);
     gl.uniform2f(drw.u.uPtr, ptr.has ? ptr.sx : 9, ptr.has ? ptr.sy : 9);
-    gl.uniform3f(drw.u.uShock, shockNdc[0], shockNdc[1], shockT);
+    gl.uniform2f(drw.u.uWave, wave[0], wave[1]);
     gl.drawArrays(gl.POINTS, 0, N);
     gl.disable(gl.BLEND);
   }
 
-  // ---- the interface the layers are told to become
+  // ---- the controls: a switch for the layers, the mouse for the 3D and the wave
   function hud() {
     nameEl.textContent = nextName;
     noEl.textContent = `${layerIdx + 1}/${LAYERS.length}`;
-    ui.inert = nextName !== "ui"; // the interface is only there while its layer is
+    ui.inert = refOn || nextName !== "ui"; // the panel is only there while its layer is
   }
-  function goto(i, ndc = [0, 0]) {
+  /** Tell the dots to become layer i. They go out and walk there, from the centre outwards. */
+  function goto(i) {
     layerIdx = ((i % LAYERS.length) + LAYERS.length) % LAYERS.length;
     prevName = nextName;
     nextName = LAYERS[layerIdx];
     cur = 1 - cur; // the texture that held the previous layer now holds the new one; the old "next" is the new "previous"
     upload(targets[cur], layerData(nextName));
     since = 0;
-    shockT = 0;
-    click = [ndc[0] * (cw / ch), ndc[1]]; // at z = 0 the world is the screen: x in aspect units, y in [-1, 1]
-    shockNdc = ndc;
+    reset = 1;
+    click = [0, 0];
     hover = 0;
     hud();
   }
+  function dropWave(ndc) {
+    wave = ndc;
+    waveT = 0;
+  }
   const ndcOf = (e) => [(e.clientX / innerWidth) * 2 - 1, 1 - (e.clientY / innerHeight) * 2];
 
+  addEventListener("pointerdown", (e) => {
+    if (e.target.closest?.(".hud")) return;
+    Object.assign(drag, { on: true, x: e.clientX, y: e.clientY, sx: e.clientX, sy: e.clientY, t0: performance.now(), moved: false });
+  });
   addEventListener("pointermove", (e) => {
-    if (e.pointerType === "touch") return;
-    const [x, y] = ndcOf(e);
-    ptr.x = x;
-    ptr.y = y;
-    ptr.has = true;
+    if (e.pointerType !== "touch") {
+      const [x, y] = ndcOf(e);
+      ptr.x = x;
+      ptr.y = y;
+      ptr.has = true;
+    }
+    if (!drag.on) return;
+    if (!drag.moved && Math.hypot(e.clientX - drag.sx, e.clientY - drag.sy) > 6) drag.moved = true;
+    if (drag.moved) {
+      const dx = e.clientX - drag.x, dy = e.clientY - drag.y;
+      cam.yaw += dx * 0.007;
+      cam.pitch = Math.max(-1.4, Math.min(1.4, cam.pitch + dy * 0.007));
+      cam.vyaw = Math.max(-5, Math.min(5, dx * 0.007 * 50)); // (what it keeps turning at when you let go, in rad/s)
+      cam.vpitch = Math.max(-5, Math.min(5, dy * 0.007 * 50));
+    }
+    drag.x = e.clientX;
+    drag.y = e.clientY;
+  });
+  addEventListener("pointerup", (e) => {
+    if (!drag.on) return;
+    drag.on = false;
+    const control = e.target.closest?.("button, .hud");
+    if (!drag.moved && performance.now() - drag.t0 < 600 && !control) dropWave(ndcOf(e)); // a click drops the wave; on a control it does not
   });
   document.addEventListener("pointerleave", () => { ptr.has = false; });
-  addEventListener("click", (e) => {
-    if (e.target.closest?.(".hud")) return;
-    goto(layerIdx + 1, e.detail === 0 ? [0, 0] : ndcOf(e)); // a click or a tap; Enter on a button has no position
-  });
   addEventListener("keydown", (e) => {
     if (e.target.tagName === "INPUT" || e.metaKey || e.ctrlKey || e.altKey) return;
     if (e.key === "ArrowRight") goto(layerIdx + 1);
@@ -495,7 +604,10 @@ function start() {
     else if (/^[1-9]$/.test(e.key) && Number(e.key) <= LAYERS.length) goto(Number(e.key) - 1);
     else if (e.key === "[") setPixel(pixel - 0.05);
     else if (e.key === "]") setPixel(pixel + 0.05);
+    else if (e.key === "r" || e.key === "R") setRef(!refOn);
   });
+  document.getElementById("prev").addEventListener("click", () => goto(layerIdx - 1));
+  document.getElementById("next").addEventListener("click", () => goto(layerIdx + 1));
   ui.addEventListener("pointerover", (e) => { const t = e.target.closest("[data-id]"); hover = t ? Number(t.dataset.id) : 0; });
   ui.addEventListener("pointerout", () => { hover = 0; });
   ui.addEventListener("focusin", (e) => { const t = e.target.closest("[data-id]"); hover = t ? Number(t.dataset.id) : 0; });
@@ -507,11 +619,24 @@ function start() {
     if (!f) return;
     try {
       picture = await pictureFromFile(f);
-      cache.delete("cosmos");
-      goto(LAYERS.indexOf("cosmos"), ndcOf(e));
+      cache.delete("picture");
+      goto(LAYERS.indexOf("picture"));
     } catch (err) { console.warn(err); }
   });
 
+  /** The reference: the real home, in a frame over the swarm, to compare the two (its own pointer, its own theme). */
+  function setRef(on) {
+    refOn = on;
+    if (on && !refEl.getAttribute("src")) refEl.setAttribute("src", refEl.dataset.src);
+    refEl.hidden = !on;
+    canvas.style.visibility = on ? "hidden" : "";
+    refBtn.setAttribute("aria-pressed", String(on));
+    refBtn.textContent = on ? "ref: the home" : "ref: swarm";
+    hud();
+  }
+  refBtn.addEventListener("click", () => setRef(!refOn));
+
+  let urlTimer = 0, cellTimer = 0;
   function setPixel(g) {
     pixel = Math.min(1, Math.max(0, Math.round(g * 100) / 100));
     slider.value = String(pixel);
@@ -521,62 +646,68 @@ function start() {
       if (pixel > 0) u.searchParams.set("pixel", String(pixel)); else u.searchParams.delete("pixel");
       history.replaceState(null, "", u);
     }, 300);
+    clearTimeout(cellTimer); // the layers are built again for the new cell, and the pixels walk to it
+    cellTimer = setTimeout(() => rebuild(), 250);
   }
-  let urlTimer = 0;
+  /** The grid changed (the pixel setting, the window): build the current layer for it, and the dots walk to the new cells. */
+  function rebuild() {
+    resize();
+    goto(layerIdx);
+  }
   slider.addEventListener("input", () => setPixel(Number(slider.value)));
   slider.value = String(pixel);
-
   let resizeTimer = 0;
   addEventListener("resize", () => {
-    resize();
     clearTimeout(resizeTimer);
-    resizeTimer = setTimeout(() => { // the interface is laid out by CSS: when the layout moves, the dots go to the new places
-      cache.delete("ui");
-      if (nextName === "ui") upload(targets[cur], layerData("ui"));
-    }, 150);
+    resizeTimer = setTimeout(rebuild, 200);
   });
 
-  resize();
+  const first = params.get("layer");
+  const startIdx = first && LAYERS.includes(first) ? LAYERS.indexOf(first) : 0;
+  nextName = LAYERS[startIdx];
+  layerIdx = startIdx;
+  upload(targets[cur], layerData(nextName)); // the first layer: the dots land in it from the scatter
   hud();
-  const initial = params.get("layer");
-  if (initial && LAYERS.includes(initial)) goto(LAYERS.indexOf(initial));
   if (matchMedia("(hover: hover) and (pointer: fine)").matches && !reduce) html.classList.add("live");
   html.classList.add("gl");
 
-  let last = performance.now(), paused = false;
+  let last = performance.now();
   function frame(now) {
-    if (!paused) simulate((now - last) / 1000);
+    if (!refOn) {
+      if (!paused) simulate((now - last) / 1000);
+      draw();
+    }
     last = now;
-    draw();
     requestAnimationFrame(frame);
   }
   requestAnimationFrame(frame);
 
-  // for tuning and for checking in the console: every number the page's look depends on, and a way to move time by hand
+  // for tuning and for checking in the console: every number the look depends on, and a way to move time by hand
   window.__swarm = {
-    goto, next: () => goto(layerIdx + 1), setPixel,
+    goto, next: () => goto(layerIdx + 1), setPixel, setRef, wave: dropWave, rebuild,
     pause(on = true) { paused = on; }, // (freezes the clock; step() still moves it, draw() still draws)
     step(sec = 1) { for (let t = 0; t < sec; t += 1 / 60) simulate(1 / 60); draw(); },
-    info: () => ({ layer: nextName, from: prevName, since, pixel, setting: pixelSetting(pixel), cw, ch, dpr, reduce, time }),
+    turn(yaw, pitch) { cam.yaw = yaw; cam.pitch = pitch; },
+    info: () => ({ layer: nextName, from: prevName, since, pixel, cam: { ...cam }, waveT, cell: G.ctx.cell, cols: G.ctx.cols, rows: G.ctx.rows, dpr: G.dpr, reduce, time, ref: refOn }),
     /** lit share and mean level of the canvas, read back right after a draw (numbers before pictures) */
     stats() {
       draw();
-      const px = new Uint8Array(cw * ch * 4);
-      gl.readPixels(0, 0, cw, ch, gl.RGBA, gl.UNSIGNED_BYTE, px);
+      const { viewW, viewH } = G.ctx, px = new Uint8Array(viewW * viewH * 4);
+      gl.readPixels(0, 0, viewW, viewH, gl.RGBA, gl.UNSIGNED_BYTE, px);
       let lit = 0, sum = 0;
-      for (let i = 0; i < cw * ch; i++) { const v = px[i * 4]; sum += v; if (v > 24) lit++; }
-      return { lit: lit / (cw * ch), mean: sum / (cw * ch) / 255 };
+      for (let i = 0; i < viewW * viewH; i++) { const v = px[i * 4]; sum += v; if (v > 24) lit++; }
+      return { lit: lit / (viewW * viewH), mean: sum / (viewW * viewH) / 255 };
     },
     shot() { draw(); return canvas.toDataURL(); },
   };
 }
 
 try {
-  await document.fonts?.ready;
+  await Promise.all([document.fonts?.ready, loadWordmark()]);
   start();
 } catch (err) {
-  // no WebGL2 (or no float targets): the DOM on its own, the interface as plain HTML
+  // no WebGL2 (or no float targets): the DOM on its own, the panel as plain HTML
   console.warn(err);
   canvas.remove();
-  hudEl.textContent = "this experiment needs WebGL2: the interface above is the plain page";
+  hudEl.textContent = "this experiment needs WebGL2: the panel above is the plain page";
 }

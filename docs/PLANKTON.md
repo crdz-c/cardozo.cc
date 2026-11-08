@@ -14,9 +14,10 @@ interface every page carries, every animation with its numbers, what exists toda
 > taught. Settled with Lucas: the two layers are **surface and beneath** (§3), and "no colour in the background" meant the grey
 > haze round a sheet, not a dark page. Open: the name, and what the next page is (§10).
 >
-> **Experiment in progress:** `/swarm` (§14), a different way to render everything (an interface, a picture, 3D) with one set of
-> dots that move between layers like a drone show, with a **pixel setting** from fine dust to the screen's grid. Unlisted, not the
-> home's interface.
+> **Experiment in progress:** `/swarm` (§14): one set of dots, in the home's own look (cells, lattice, blue noise), that **walks**
+> between the home's wordmark, a panel, a picture and three 3D shapes along the shortest path, with a switch, a drag that turns
+> the 3D, a click that drops the wave, the real home as a reference, and a **pixel setting** from the home's cell to the screen's
+> grid. Unlisted, not the home's interface.
 
 - [1. The name](#1-the-name)
 - [2. The laws](#2-the-laws)
@@ -247,7 +248,7 @@ Shared by every profile (the hero's shader is the reference; `disk/engine.js` ca
 |---|---|---|---|---|---|
 | **hero** | `/` | the wordmark + five brand marks beneath, as links | **is** the reference | `hero.js` (own inline shader), `index.html`, `style.css`, `brands.js`, `raster.js` | shipped |
 | **plate** | `/disk` | a picture on a card or a disc in **3D**, turned by drag | the field, sea, flicker, landing and wave; **no** pointer push, curtain, pulse or theme | `disk/` (a copy of the lab's `engine.js`, `math.js`) | shipped; the rest of the lab is on `lab-pixel-media` |
-| **swarm** | `/swarm` | one set of dots told to become an interface, a picture, a cube, a sphere, a column; click for the next | **not** the home's effects: a spring model, free specks at pixel 0, the screen's grid at pixel 1 | `swarm/` | experiment (§14) |
+| **swarm** | `/swarm` | one set of dots that walks between the home's wordmark, a panel, a picture, a cube, a sphere, a column | the home's look (cells, lattice, blue noise); **not** its effects: a walk, a wave, a drag | `swarm/` | experiment (§14) |
 
 The hero and the disk each carry their own copy of the shader, the build curve and the pointer; there is no shared module.
 Consolidating them is §12.
@@ -399,61 +400,76 @@ Written for a session that starts cold. The first two are not optional.
 
 ## 14. Experiment: /swarm, one set of dots
 
-Lucas's brief (2026-11-08), after sending seven references (a glass cube, a sphere with veins, a lit column, a cyclist of dust, a
-hand and an orb, a dithered cosmos, a sparse face): *render more kinds of thing, with movement; the background darker and less
-granular; test some in a localhost page; be organic and 3D; define how to render UI, 3D models, images and interactions so that
-they are consistent; we never scroll; each layer (curtain) of pixels renders its context, and **the pixels reorganise on the
-transitions, like a drone show**; swap what is shown at each click, to test the layer (loop)*. Then: **a setting for the pixel
-density**; at one end the references, at the other *just the screen's grid with a few pixels*.
+**Round 1 (2026-11-08).** Lucas sent seven references (a glass cube, a sphere with veins, a lit column, a cyclist of dust, a hand
+and an orb, a dithered cosmos, a sparse face) and asked to test, in a localhost page, how to render a UI, 3D models, images and
+interactions *consistently*, never scrolling, with pixels that reorganise on the transitions *like a drone show*. The first build
+drew soft round specks, free on the screen, and moved them with springs.
 
-`swarm/` is that test. It is an **experiment**, not the home's interface: it does not carry the shell of §4, and at pixel 0 it
-breaks laws 1 and 3 on purpose (dots are free specks, not cells of one fixed dither). The comparison with the home is the point.
+**Round 2 (the same day), his review:** *"menos areia e mais pixel, não parece um painel, só parece areia mesmo. Como está hoje na
+home é perfeito, precisamos só refinar. Adicione ele como ref e faça os outros com base nele, com um botão de switch pra trocar, e
+deixa o mouse pra rotacionar 3D e fazer o drop da onda. O que precisa melhorar é a animação dos pixels nas transições, como se
+apagassem e "caminhassem" até o próximo local, no caminho mais curto."* That is law 9 again (§2): the lookalike was the soft dust,
+and the home was right all along. Round 2 is what stands; the specks, the springs and the swirl are gone.
 
-### The model that makes the kinds of thing consistent
+`swarm/` is still an **experiment**, unlisted, and not the home's interface (it does not carry the shell of §4), but its look is now
+the home's.
 
-**There is one set of dots (98 304) and nothing else.** A *layer* is a list of target positions for those same dots, in one 3D
-space, with a tone each (density carries the picture; law 2 still holds). The dots are never created or destroyed: a click tells
-them to go somewhere else. Every kind of content is just a different way of producing targets:
+### The model
+
+**One set of dots (98 304) and nothing else.** A *layer* is a list of target positions for those same dots, one 3D space, a tone
+each. The dots are never created or destroyed: a switch tells them to go somewhere else. **Every dot is one cell of the screen's
+grid, as on the home**: a crisp square, on the checkerboard lattice, binary (lit or off), dithered by the home's own blue-noise
+map, true black. Tone is density (law 2); a dot's own brightness only flickers, as the home's (`FLICK_L` 0.4).
 
 | layer | where the targets come from | built from |
 |---|---|---|
-| **ui** | a bitmap of the page's real elements (heading, text, buttons), sampled in proportion to tone | the DOM (laid out by CSS, read with `getBoundingClientRect`, drawn to a 2D canvas, then sampled) |
-| **cosmos** | a picture, sampled by tone, with relief from tone (z) | a drawn picture, or **any image dropped on the page** (it stays on this machine) |
-| **cube**, **sphere**, **column** | points on edges, corners and faces; on a skin with veins; on a lit, fluted column (density follows a light) | maths (`swarm/layers.js`, no DOM) |
-| **dust** | the last 16 384 dots, the same in every layer: a sparse, dim background | the field's role, with far less grain than the home's |
+| **home** | the wordmark, **from the home's own SVG** (read from `../index.html`), at the home's rule: lattice, `DENS_L` 0.72 | the reference |
+| **ui** | a panel of the page's real elements (card, heading, text, buttons): text and lines crisp, one cell thick; the fill a light dither | the DOM (laid out by CSS, read with `getBoundingClientRect`, drawn to a 2D canvas in device px, then dithered cell by cell) |
+| **picture** | a picture, dithered by tone (no lattice), relief from tone (z); **any image dropped on the page** (it stays on this machine) | a drawn picture, or the dropped one |
+| **cube**, **sphere**, **column** | even and thin: edges two cells wide, a skin at a fixed spacing (a Fibonacci lattice, a threshold on the blue noise), veins as walks, the column's **light as the threshold** so its shading is a dither | maths (`swarm/layers.js`, no DOM) |
+| **field** | the last 16 384 dots, in every layer: faint, free, gathered round the middle, 1.2 % of the cells (the home's field is faint, not sand) | the home's role |
 
-The interface layer is the DOM first (docs §3, rule 4): the buttons are real `<button>`s with their hover and focus, transparent
-(never hidden) while the canvas runs, `inert` while another layer is showing.
+The flat layers are made by the home's rule: `lit if tone × 0.72 > blueNoise[cell mod 64] + 0.3 × (0.12 × lum + 0.004)` on lattice
+sites (`ditherBody`). They are built **for the screen's grid** (the cell, the canvas), so a dot is exactly where the home would put
+one. The interface layer is the DOM first (§3, rule 4): real `<button>`s with their hover and focus, transparent (never hidden)
+while the canvas runs, `inert` while another layer shows; a hovered element's dots go steady and bright.
 
-### Movement: why it reads as a drone show
+### The walk (the transition)
 
-- **Dot i in one layer is near dot i in the next**, in the same relative place: each layer's points are sorted by a Morton key
-  over its own bounding box, so the transition is a coherent flow and not a shuffle (a test measures it).
-- Each dot is a **spring** toward its target with its own stiffness and damping (a little overshoot, then it settles), and a
-  **swirl** while it is far from home, so paths curve. A dot in flight glows. Speed is limited.
-- Each dot leaves the old target **at its own moment**: a wave from where you clicked (0.34 s per world unit) plus noise (0.5 s).
-- It runs on the GPU (a position texture and a velocity texture, updated every frame) and **retargets at any moment**: click
-  again mid-flight and the swarm turns round.
-- On top: a pointer that is a hole in the dots with a push round it (moving it stirs more), a ring running out from each click,
-  a slow breath and twinkle per dot, a small camera that follows the pointer. `prefers-reduced-motion` (or `?still`): the dots
-  jump to their places and nothing moves.
+Each dot, **at its own moment** (a wave from the centre, 0.34 s per world unit, plus up to 0.5 s of its own): **goes out** (it
+stutters, then dims), **walks to its place in the next layer along the shortest path, a straight line, a few cells at a time** (18
+hops a second, each dot on its own beat; the farther the longer, 0.45 to 1.6 s, never long), dim, and **lights with a flash when
+it arrives**, then follows its layer (a turning cube turns). There is no spring and no swirl: nothing overshoots or curves. Dot
+*i* of one layer is near dot *i* of the next (every layer is sorted by place, a Morton key over its own box; a test measures it),
+so the walks are short and read as flow, not shuffle. A dot that does not move (the field) does not walk. Switching mid-walk is
+fine: the walkers hold where they are and set off from there.
+
+### The mouse, the switch, the reference
+
+| | |
+|---|---|
+| **switch** | ‹ › buttons (and ← →, 1–6): the layer changes; a click never switches |
+| **drag** | turns the 3D layers (with a little inertia); the flat ones tilt and spring back |
+| **click** | drops the wave: two pulses that push and light what they cross (a click on a control sends no wave, as on the home) |
+| **pointer** | a hole in the dots with a push round it; moving it stirs more |
+| **ref** | the real home, in a frame over the swarm (R): to compare the two, side by side in time, with the home's own pointer and theme |
 
 ### The pixel setting
 
-One slider (and `[` / `]`, and `?pixel=0.5`), 0 to 1. **0** is the references: round soft specks, free on the screen. **1** is *the
-screen's grid with a few pixels*: big square cells (18 CSS px) snapped to the grid, one dot in twenty drawn, the grid itself
-faintly visible behind them (`?gridlines=0` hides it), the dust lifted so the few lit cells can be seen. In between, the cell
-grows geometrically and each step changes snap, squareness, thinning and brightness smoothly. Tone stays density at every
-setting: a cell adds up the dots that fall in it. The maths is `swarm/density.js` (pure, tested at both ends and for direction).
+One slider (and `[` / `]`, and `?pixel=0.5`), 0 to 1: **the size of a cell**, from the home's own (1.5 CSS px, never under 2 device
+px) at 0 to **the screen's grid** at 1 (18 CSS px cells, a gap between them, the grid itself faintly visible, `?gridlines=0` hides
+it, and the field down to a handful of dots: *the screen's grid with a few pixels*). There is no soft end. A bigger cell is not a
+blown-up picture: the layers are built again for it and **the pixels walk to the new cells**. The maths is `swarm/density.js`.
 
 ### What it showed, and what is open
 
-- **Showed:** one dot set can be a UI, a picture and two kinds of 3D under the same rules, and the transition between any two is
-  the same trick, as the home's landing and curtain are (§6). The pixel setting works on all of them with no change to the layers.
-- **Open:** (1) is this the home's material or a sibling? (it has no lattice and no blue-noise threshold at pixel 0); (2) the
-  interface layer needs real states beyond hover (focus, press), and the 3D layers have no hit-testing yet; (3) text is the
-  browser's, rasterised: the home's pixel font (on `lab-pixel-media`) would be more native; (4) the cyclist and the face (dust
-  that falls apart, a figure out of a few dots) are not built: they are the same machinery with another source; (5) cost on a
-  phone is not measured.
-- **Check it:** `__swarm.step(s)`, `.pause()`, `.goto(i, [x, y])`, `.stats()` (lit share and mean level, read back) and `.shot()` are
-  in the console; the layers and the setting are tested by `tools/test.sh`.
+- **Showed:** the home's look carries over to a panel, a picture and three 3D shapes without leaving its rules (cells, lattice,
+  blue noise, true black), and one dot set can move between them with one trick, as the landing and the curtain do (§6).
+- **Open:** (1) a 3D shape is *projected* and snapped each frame, so a turning cube shimmers cell by cell rather than being
+  dithered in screen space as `/disk` does: which is right? (2) the panel's text is the browser's, rasterised: at the home's cell a
+  16 px line is five cells tall; the home's pixel font (on `lab-pixel-media`) would be more native; (3) only the dark theme; (4) the
+  cyclist and the face from the references (dust that falls apart, a figure out of a few dots) are not built; (5) the walk's
+  numbers (hops a second, speed, delay) are first guesses, tuned by eye on one screen; (6) cost on a phone is not measured.
+- **Check it:** in the console `__swarm.step(s)`, `.pause()`, `.goto(i)`, `.wave([x, y])`, `.turn(yaw, pitch)`, `.setRef(on)`,
+  `.stats()` (lit share and mean level, read back), `.info()` and `.shot()`; the layers, the setting and the page's promises are
+  tested by `tools/test.sh`.

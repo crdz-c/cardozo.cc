@@ -11,8 +11,8 @@
     <link rel="icon" href="../favicon.png" type="image/png" sizes="64x64" />
     <link rel="apple-touch-icon" href="../apple-touch-icon.png" />
     <style>
-      /* An experiment, not a page of the site (docs/PLANKTON.md §14): one set of dots that is told to become an interface, a picture,
-         a cube, a sphere, a column, and moves between them like a drone show. Built as the DOM and the canvas: the interface below is
+      /* An experiment, not a page of the site (docs/PLANKTON.md §14): one set of dots that is told to become the home's wordmark, a
+         panel, a picture, a cube, a sphere, a column, and walks between them. Built as the DOM and the canvas: the panel below is
          real HTML, laid out by CSS; swarm.js reads it and draws it as dots, and with the canvas running it is transparent (never
          hidden: hover, focus and screen readers keep working on it). Nothing scrolls. Unlisted: it lives at /swarm. */
       :root {
@@ -39,66 +39,85 @@
         width: 100%;
         height: 100%;
         display: block;
+        image-rendering: pixelated; /* crisp cells when the canvas is upscaled on high-DPI screens */
+      }
+      #ref {
+        position: fixed;
+        inset: 0;
+        width: 100%;
+        height: 100%;
+        border: 0;
+        background: #000;
+        z-index: 3;
+      }
+      #ref[hidden] {
+        display: none;
       }
       .ui {
         position: fixed;
         inset: 0;
         z-index: 1;
         display: flex;
-        flex-direction: column;
         align-items: center;
         justify-content: center;
-        gap: 18px;
         padding: 0 16px;
-        text-align: center;
       }
-      .ui h1 {
+      .card {
+        box-sizing: border-box;
+        width: min(560px, calc(100vw - 32px));
+        padding: 30px 30px 26px;
+        border: 1px solid var(--paper);
+        border-radius: 14px;
+        background: rgba(240, 239, 234, 0.06);
+        display: flex;
+        flex-direction: column;
+        gap: 16px;
+      }
+      .card h1 {
         margin: 0;
-        font-size: clamp(40px, 11vmin, 112px);
-        font-weight: 600;
+        font-size: clamp(36px, 7vmin, 64px);
+        font-weight: 700;
         letter-spacing: -0.02em;
         line-height: 1;
       }
-      .ui p {
+      .card p {
         margin: 0;
-        font-size: clamp(14px, 2.4vmin, 20px);
-        opacity: 1;
+        font-size: clamp(15px, 2.4vmin, 19px);
+        line-height: 1.35;
       }
-      .ui nav {
+      .card p.meta {
+        font: 12px ui-monospace, "SF Mono", Menlo, monospace;
+        letter-spacing: 0.04em;
+      }
+      .card nav {
         display: flex;
-        gap: 14px;
-        margin-top: 10px;
+        flex-wrap: wrap;
+        gap: 12px;
       }
-      .ui button {
+      .card button {
         font: inherit;
-        font-size: clamp(14px, 2.4vmin, 19px);
+        font-size: clamp(14px, 2.4vmin, 18px);
         color: inherit;
         background: transparent;
         border: 1px solid currentColor;
         border-radius: 999px;
-        padding: 10px 24px;
+        padding: 9px 22px;
         cursor: pointer;
       }
       html.gl .ui {
         opacity: 0; /* not hidden: it keeps its place, its hover, its focus, its semantics */
       }
       html.gl.live canvas {
-        cursor: none; /* the pointer is a hole in the dots */
+        cursor: grab; /* drag turns the 3D layers; the pointer itself is drawn as a hole in the dots */
       }
       .hud {
         position: fixed;
-        z-index: 2;
+        z-index: 4;
         bottom: 14px;
-        font: 11px/1.4 ui-monospace, "SF Mono", Menlo, monospace;
-        color: rgba(240, 239, 234, 0.55);
-        letter-spacing: 0.02em;
         margin: 0;
-      }
-      .hud.name {
-        left: 16px;
-      }
-      .hud.pix {
-        right: 16px;
+        font: 11px/1.4 ui-monospace, "SF Mono", Menlo, monospace;
+        color: rgba(240, 239, 234, 0.6);
+        letter-spacing: 0.02em;
         display: flex;
         align-items: center;
         gap: 8px;
@@ -107,18 +126,43 @@
         color: var(--paper);
         font-weight: 600;
       }
+      .hud button {
+        font: inherit;
+        color: var(--paper);
+        background: rgba(0, 0, 0, 0.6);
+        border: 1px solid rgba(240, 239, 234, 0.55);
+        border-radius: 6px;
+        padding: 5px 10px;
+        cursor: pointer;
+      }
+      .hud button[aria-pressed="true"] {
+        background: var(--paper);
+        color: #000;
+      }
+      .hud.left {
+        left: 16px;
+      }
+      .hud.right {
+        right: 16px;
+      }
+      .hud.hint {
+        left: 16px;
+        bottom: 52px;
+        display: block;
+      }
       .hud input[type="range"] {
         width: 120px;
         accent-color: var(--paper);
         touch-action: pan-x;
       }
       @media (max-width: 640px) {
-        .hud.name {
-          right: 16px; /* the line may wrap: the slider goes above it, full width */
-        }
-        .hud.pix {
+        .hud.right {
           left: 16px;
-          bottom: 56px;
+          bottom: 52px;
+          justify-content: space-between;
+        }
+        .hud.hint {
+          bottom: 90px;
         }
         .hud input[type="range"] {
           flex: 1;
@@ -130,20 +174,31 @@
   <body>
     <canvas id="scene" aria-hidden="true"></canvas>
     <main class="ui" id="ui">
-      <h1 data-id="1" data-tone="1">cardozo.cc</h1>
-      <p data-id="2" data-tone="0.6">dots that behave as if each one were alive</p>
-      <nav aria-label="Sections">
-        <button type="button" data-id="3" data-tone="0.9">work</button>
-        <button type="button" data-id="4" data-tone="0.9">notes</button>
-        <button type="button" data-id="5" data-tone="0.9">contact</button>
-      </nav>
+      <section class="card" aria-label="Panel">
+        <h1 data-id="1">cardozo.cc</h1>
+        <p data-id="2">product design, in dots that behave as if each one were alive</p>
+        <nav aria-label="Sections">
+          <button type="button" data-id="3">work</button>
+          <button type="button" data-id="4">notes</button>
+          <button type="button" data-id="5">contact</button>
+        </nav>
+        <p class="meta" data-id="6">pixel panel · one cell, one dot</p>
+      </section>
     </main>
-    <p class="hud name" id="hud"><b id="layer-name">ui</b> <span id="layer-no">1/5</span> · click: next layer · ← → · 1–5 · drop an image on the picture</p>
-    <label class="hud pix">
-      pixel <span>fine</span>
-      <input id="pixel" type="range" min="0" max="1" step="0.01" value="0" aria-label="Pixel size: from fine dust (0) to the screen's grid with a few squares (1)" />
-      <span>grid</span>
-    </label>
+    <iframe id="ref" hidden title="The home page, the reference" data-src="../?theme=dark"></iframe>
+    <p class="hud hint" id="hint">drag: turn the 3D · click: drop the wave · ← → 1–6 · R: the home · drop an image on the picture</p>
+    <div class="hud left">
+      <button type="button" id="prev" aria-label="Previous layer">‹</button>
+      <span><b id="layer-name">home</b> <span id="layer-no">1/6</span></span>
+      <button type="button" id="next" aria-label="Next layer">›</button>
+    </div>
+    <div class="hud right">
+      <button type="button" id="ref-btn" aria-pressed="false">ref: swarm</button>
+      <label>
+        pixel
+        <input id="pixel" type="range" min="0" max="1" step="0.01" value="0" aria-label="Pixel size: from the home's own cell (0) to the screen's grid with a few squares (1)" />
+      </label>
+    </div>
     <script type="module" src="swarm.js"></script>
   </body>
 </html>

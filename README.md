@@ -20,7 +20,7 @@ brands.js    the five brand marks as SVG path data
 raster.js    exact distance transform, corner rounding, blue-noise threshold map
 favicon.ico  the tab icon (16, 32, 48): the wordmark's C dissolving into pixels; favicon.png (64) and apple-touch-icon.png (180) too
 disk/        the CD, in the hero's dots, on a 3D disc you turn: cardozo.cc/disk (see /disk)
-swarm/       an experiment: one set of dots that moves between an interface, a picture and 3D shapes like a drone show, with a pixel setting: cardozo.cc/swarm (see /swarm)
+swarm/       an experiment: one set of dots, in the home's look, that walks between the wordmark, a panel, a picture and 3D shapes: cardozo.cc/swarm (see /swarm)
 docs/        PLANKTON.md: the style's name, its laws, the two layers (surface and beneath), the shell, the animations, what exists and what is next
 tools/       make-favicon.py draws those three from the C's outline and the site's blue-noise map (needs Pillow and node)
              make-cd.py cleans the CD's sprite (takes the hand out of a photo of it; needs OpenCV and numpy); test.sh runs disk/'s and the docs' tests
@@ -376,17 +376,22 @@ it**: nothing on the home page links there (a test checks), it is reached by its
 ## /swarm
 
 An **experiment** (not the home's interface; docs/PLANKTON.md §14), unlisted like `/disk`: [cardozo.cc/swarm](https://cardozo.cc/swarm) is one set of
-98 304 dots that is told to become an interface, a picture, a cube, a sphere, a column, and **flies between them like a drone show**.
-Click (or tap, or Enter) for the next layer; `←` `→` or `1`–`5` to choose; drop any image on the page to make it the picture.
+98 304 dots, **in the home's own look** (every dot a square cell of the screen's grid, on the checkerboard lattice, dithered by the same
+blue noise, true black), that is told to become the home's wordmark, a panel, a picture, a cube, a sphere, a column, and **walks** there.
 
-- **Pixel setting.** The slider at the bottom right (or `[` and `]`, or `?pixel=0.5`): 0 is fine round dust, the references; 1 is
-  the screen's own grid, big square cells with a few lit and the grid faintly showing (`?gridlines=0` hides it).
-- **Built as the DOM and the canvas.** `swarm/index.html` is a real heading, paragraph and buttons, laid out by CSS; `swarm.js` reads
-  them, draws them to a 2D canvas and samples that into target positions. The dots live on the GPU (a position and a velocity
-  texture): each is a spring toward its target, leaving the old one at its own moment, in a wave from where you clicked.
-  `layers.js` (the targets) and `density.js` (the pixel setting) are pure maths with tests. Nothing scrolls.
-- **Tuning.** `?layer=cube`, `?pixel=…`, `?still` (reduced motion); in the console `__swarm.step(s)`, `.pause()`, `.goto(i, [x, y])`,
-  `.stats()`, `.shot()`.
+- **Switch.** The ‹ › buttons (or `←` `→`, or `1`–`6`) change the layer. **Drag** turns the 3D layers (the flat ones tilt and spring
+  back); a **click** drops the wave. Drop any image on the page to make it the picture. **R** (or the `ref` button) shows the real home
+  in a frame over it, to compare.
+- **The walk.** Each dot, at its own moment, goes out, walks to its place in the next layer along the shortest path (a straight line, a
+  few cells at a time, dim) and lights with a flash when it arrives. No spring, no swirl.
+- **Pixel setting.** The slider at the bottom right (or `[` and `]`, or `?pixel=0.5`) is the size of a cell: 0 is the home's own, 1 is
+  the screen's grid, big cells with a few lit and the grid faintly showing (`?gridlines=0` hides it). The layers are built again for
+  the new cell and the pixels walk to it.
+- **Built as the DOM and the canvas.** `swarm/index.html` is a real card, heading, text and buttons, laid out by CSS; `swarm.js` reads
+  them, draws them to a 2D canvas and dithers that into target cells. The dots live on the GPU (a position texture and a "from +
+  progress" texture). `layers.js` (the targets) and `density.js` (the pixel setting) are pure maths with tests. Nothing scrolls.
+- **Tuning.** `?layer=cube`, `?pixel=…`, `?still` (reduced motion); in the console `__swarm.step(s)`, `.pause()`, `.goto(i)`,
+  `.wave([x, y])`, `.turn(yaw, pitch)`, `.setRef(on)`, `.stats()`, `.info()`, `.shot()`.
 
 ## Deploy
 

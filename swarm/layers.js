@@ -2,18 +2,27 @@
 // (x, y, z, w) in the layer's own space, w = element id + tone (tone in [0, 1)), sorted so that two layers pair up by place.
 //
 // Every layer has the same number of points (the dots are the same dots: nothing is created or destroyed, they are told to go
-// somewhere else, as in a drone show). The last N − BODY points are the dust, the same in every layer.
+// somewhere else, as in a drone show). The last N − BODY points are the dust, the field: the same dots in every layer.
 //
-//   ui       a bitmap of the page's real elements (swarm.js draws it from the DOM) → text and buttons
-//   cosmos   a picture: tone is density, relief from tone
+// Every point is one CELL of the screen's grid, as on the home. The flat layers are made by the home's own rule, cell by cell:
+// tone × density against a blue-noise threshold, on the checkerboard lattice, so a point is exactly where the home would put
+// a dot. The 3D layers are even, thin and regular (lines a cell or two thick, skins at a fixed spacing, light as a threshold
+// on the same noise): no gaussian blur, no sand. A point with tone 0 is a spare: it is not drawn in this layer.
+//
+//   home     the wordmark, from the home's own SVG                                     (the reference)
+//   ui       a panel of the page's real elements: crisp text and lines, a dithered fill
+//   picture  a picture: tone is density, relief from tone
 //   cube     a glass cube: bright edges and corners, a faint skin, a faint inside
 //   sphere   a skin with bright veins and a few pools
-//   column   a lit Ionic column: tone from a light, density follows it
+//   column   a lit Ionic column: the light is the threshold
 export const W = 384; // the state texture is W × H, one texel per dot
 export const H = 256;
 export const N = W * H;
-export const BODY = 320 * 256; // the dots that make shapes; the rest are dust
-export const LAYERS = ["ui", "cosmos", "cube", "sphere", "column"];
+export const BODY = 320 * 256; // the dots that make shapes; the rest are the field
+export const LAYERS = ["home", "ui", "picture", "cube", "sphere", "column"];
+export const FLAT = new Set(["home", "ui", "picture"]); // layers that lie in the screen's plane
+export const CAMERA_D = 3.2; // the camera's distance: at z = 0 the screen's height is 2 world units
+export const DENS_L = 0.72; // the home's: share of lattice sites lit inside a letter (hero.js)
 
 const TAU = Math.PI * 2;
 
@@ -32,36 +41,62 @@ const gauss = (r) => Math.sqrt(-2 * Math.log(1 - r())) * Math.cos(TAU * r());
 export const pack = (id, tone) => id + Math.min(0.999, Math.max(0, tone));
 export const unpack = (w) => ({ id: Math.floor(w), tone: w - Math.floor(w) });
 
-function makeOut(count) {
-  const a = new Float32Array(count * 4);
-  let n = 0;
+/**
+ * The context a layer is built for: the screen's grid. cell is in device px; view is the canvas in device px; bn is the 64 × 64
+ * blue-noise threshold map (raster.js blueNoise(), bytes 0…255). cellWorld is a cell in world units.
+ */
+export function gridContext({ viewW, viewH, cell, bn }) {
+  return { viewW, viewH, cell, bn, cols: Math.ceil(viewW / cell), rows: Math.ceil(viewH / cell), aspect: viewW / viewH, cellWorld: (2 * cell) / viewH };
+}
+const threshold = (bn, i, j) => bn[((j & 63) << 6) | (i & 63)] / 255;
+/** The centre of cell (cx, cy), cy counted from the bottom, in world units at z = 0. */
+export function cellCentre(ctx, cx, cy) {
+  return [(((cx + 0.5) * ctx.cell) / ctx.viewW * 2 - 1) * ctx.aspect, ((cy + 0.5) * ctx.cell) / ctx.viewH * 2 - 1];
+}
+/** Where a point must be so that the camera, frontal, projects it to world (x, y) at z = 0: perspective undone. */
+const preProject = (x, y, z) => [(x * (CAMERA_D - z)) / CAMERA_D, (y * (CAMERA_D - z)) / CAMERA_D, z];
+
+// ---- collecting points, and making exactly BODY of them
+function collector() {
+  const hot = []; // tone ≥ 0.95: edges, solid text, corners: kept first
+  const rest = [];
   return {
-    a,
-    get n() {
-      return n;
+    add(x, y, z, id, tone) {
+      (tone >= 0.95 ? hot : rest).push(x, y, z, pack(id, tone));
     },
-    count,
-    full: () => n >= count,
-    push(x, y, z, id, tone) {
-      if (n >= count) return;
-      const i = n++ * 4;
-      a[i] = x;
-      a[i + 1] = y;
-      a[i + 2] = z;
-      a[i + 3] = pack(id, tone);
+    get count() {
+      return (hot.length + rest.length) / 4;
     },
+    hot,
+    rest,
   };
 }
-
-/** Fill what is left with a dim haze round the points already there: the grain round a shape, in the references. */
-function haze(out, r, sigma, toneMul) {
-  const have = out.n;
-  while (!out.full()) {
-    const j = ((r() * have) | 0) * 4;
-    const w = out.a[j + 3];
-    const { id, tone } = unpack(w);
-    out.push(out.a[j] + gauss(r) * sigma, out.a[j + 1] + gauss(r) * sigma, out.a[j + 2] + gauss(r) * sigma, id, Math.max(0.06, tone * toneMul));
+/** Exactly BODY points: too many, the dim ones thin out at random; too few, the spares copy a point (tone 0: not drawn here). */
+function finish(c, r) {
+  const out = new Float32Array(BODY * 4);
+  let n = 0;
+  const put = (arr, i) => {
+    out.set(arr.slice(i * 4, i * 4 + 4), n * 4);
+    n++;
+  };
+  const hotN = Math.min(c.hot.length / 4, BODY);
+  for (let i = 0; i < hotN; i++) put(c.hot, i);
+  const room = BODY - n, restN = c.rest.length / 4;
+  if (restN <= room) for (let i = 0; i < restN; i++) put(c.rest, i);
+  else {
+    const keep = room / restN; // a thinning that keeps the rest even: every point has the same chance
+    for (let i = 0; i < restN && n < BODY; i++) if (r() < keep) put(c.rest, i);
+    for (let i = 0; n < BODY && i < restN; i++) if (!(i & 1)) put(c.rest, i); // (rounding: top up)
   }
+  const have = n;
+  if (have === 0) out.set([0, 0, 0, pack(0, 0)], 0), (n = 1);
+  const src = Math.max(1, n);
+  for (; n < BODY; ) {
+    const j = ((r() * src) | 0) * 4;
+    out.set([out[j], out[j + 1], out[j + 2], pack(unpack(out[j + 3]).id, 0)], n * 4);
+    n++;
+  }
+  return sortByPlace(out, BODY);
 }
 
 // ---- pairing: sort by place so that dot i in one layer is near dot i in the next, in the same relative spot
@@ -97,32 +132,24 @@ export function sortByPlace(a, count = a.length / 4) {
   return out;
 }
 
-// ---- the dust, and the scatter the dots start from
-export function dust(seed = 7) {
+// ---- the field, and the scatter the dots start from
+/** The field: faint dots, free (no lattice), gathered round the middle and thinning to the edges, as the home's does (density.js dustKeep). */
+export function dust(aspect = 1.6, seed = 7) {
   const r = rng(seed);
-  const count = N - BODY;
-  const out = makeOut(count);
-  while (!out.full()) {
-    const x = r() * 2 - 1, y = r() * 2 - 1, z = r() * 2 - 1;
-    if (x * x + y * y + z * z > 1) continue;
-    const rad = 0.5 + 1.6 * Math.cbrt(r());
-    const len = Math.hypot(x, y, z) || 1;
-    out.push((x / len) * rad * 1.5, (y / len) * rad, (z / len) * rad, 0, 0.08 + 0.2 * r() * r());
+  const a = new Float32Array((N - BODY) * 4);
+  for (let i = 0; i < N - BODY; i++) {
+    const x = Math.max(-1.05, Math.min(1.05, gauss(r) * 0.5 + 0)) * aspect, y = Math.max(-1.05, Math.min(1.05, gauss(r) * 0.55));
+    a.set([x, y, (r() * 2 - 1) * 0.7, pack(0, 0.4 + 0.5 * r())], i * 4);
   }
-  return out.a;
+  return a;
 }
 export function scatter(seed = 3) {
   const r = rng(seed);
-  const out = makeOut(BODY);
-  while (!out.full()) {
-    const x = r() * 2 - 1, y = r() * 2 - 1, z = r() * 2 - 1;
-    if (x * x + y * y + z * z > 1) continue;
-    out.push(x * 2.6, y * 1.8, z * 2.2, 0, 0.1 + 0.12 * r());
-  }
-  return sortByPlace(out.a, BODY);
+  const c = collector();
+  for (let i = 0; i < BODY; i++) c.add((r() * 2 - 1) * 2.8, (r() * 2 - 1) * 1.9, (r() * 2 - 1) * 1.4, 0, 0.5 + 0.4 * r());
+  return finish(c, r);
 }
-
-/** body + dust → the N points a layer is made of. */
+/** body + field → the N points a layer is made of. */
 export function assemble(body, dustArr) {
   const a = new Float32Array(N * 4);
   a.set(body, 0);
@@ -130,181 +157,184 @@ export function assemble(body, dustArr) {
   return a;
 }
 
-// ---- layers made of a bitmap (the page's elements, a picture)
+// ---- flat layers: the home's rule, cell by cell
 /**
- * bitmap: { data: RGBA bytes, width, height }. Points are drawn in proportion to tone^gamma (tone is density), jittered inside
- * their pixel. opts: worldH (the bitmap's height in world units), count (shape points; the rest is haze), gamma, thr, depth (relief
- * from tone), baseTone, haze: [sigma, toneMul], regions: [{ id, x, y, w, h }] (pixels) that give a point its element id.
+ * sample(cx, cy) → tone 0…1 for cell (cx, cy), cy from the bottom. A cell with tone ≥ opts.solid is lit whatever its place (crisp
+ * text and lines). Below that it is dithered as the home does: only lattice sites (cx + cy even) if opts.lattice, lit when
+ * tone × opts.dens passes the blue-noise threshold. opts: { dens, lattice, solid, depth (relief from tone), idAt(cx, cy) }.
  */
-export function bitmapBody(bitmap, opts, seed = 11) {
-  const { data, width: w, height: h } = bitmap;
-  const o = { gamma: 1, thr: 0.04, depth: 0, baseTone: 0.8, haze: [0.012, 0.35], regions: [], ...opts };
-  const r = rng(seed);
-  const cdf = new Float64Array(w * h);
-  let total = 0;
-  for (let i = 0; i < w * h; i++) {
-    const lum = ((0.2126 * data[i * 4] + 0.7152 * data[i * 4 + 1] + 0.0722 * data[i * 4 + 2]) / 255) * (data[i * 4 + 3] / 255);
-    if (lum > o.thr) total += Math.pow(lum, o.gamma);
-    cdf[i] = total;
-  }
-  const out = makeOut(BODY);
-  const sc = o.worldH / h;
-  if (total > 0) {
-    for (let k = 0; k < o.count; k++) {
-      const u = r() * total;
-      let lo = 0, hi = w * h - 1;
-      while (lo < hi) {
-        const mid = (lo + hi) >> 1;
-        if (cdf[mid] < u) lo = mid + 1; else hi = mid;
+export function ditherBody(sample, ctx, opts = {}, seed = 11) {
+  const o = { dens: DENS_L, lattice: true, solid: 0.7, depth: 0, idAt: null, ...opts };
+  const r = rng(seed), c = collector();
+  for (let cy = 0; cy < ctx.rows; cy++) {
+    for (let cx = 0; cx < ctx.cols; cx++) {
+      const t = sample(cx, cy);
+      if (!(t > 0.02)) continue;
+      let tone;
+      if (t >= o.solid) tone = 1;
+      else {
+        if (o.lattice && ((cx + cy) & 1)) continue;
+        const lum = o.dens * t, th = threshold(ctx.bn, cx, cy);
+        if (!(lum > th + 0.3 * (0.12 * lum + 0.004))) continue; // the home's: on = clamp((lum − th) / (0.12 lum + 0.004)), cut below 0.3
+        tone = 0.86 + 0.1 * r();
       }
-      const px = lo % w, py = (lo / w) | 0;
-      const lum = ((0.2126 * data[lo * 4] + 0.7152 * data[lo * 4 + 1] + 0.0722 * data[lo * 4 + 2]) / 255) * (data[lo * 4 + 3] / 255);
-      let id = 0;
-      for (const g of o.regions) if (px >= g.x && px < g.x + g.w && py >= g.y && py < g.y + g.h) { id = g.id; break; }
-      out.push((px + r() - w / 2) * sc, -(py + r() - h / 2) * sc, o.depth * (lum - 0.5) + gauss(r) * 0.004, id, o.baseTone * (0.85 + 0.3 * r()));
+      const [x, y] = cellCentre(ctx, cx, cy);
+      const z = o.depth * (t - 0.5);
+      const p = preProject(x, y, z);
+      c.add(p[0], p[1], p[2], o.idAt ? o.idAt(cx, cy) : 0, tone);
     }
   }
-  if (out.n === 0) out.push(0, 0, 0, 0, 0.5); // an empty bitmap still has one dot to spread the haze from
-  haze(out, r, o.haze[0], o.haze[1]);
-  return sortByPlace(out.a, BODY);
+  return finish(c, r);
 }
 
-// ---- 3D layers
-export function cubeBody(seed = 21) {
-  const r = rng(seed), out = makeOut(BODY), s = 0.44;
-  const corners = Array.from({ length: 8 }, (_, i) => [i & 1 ? s : -s, i & 2 ? s : -s, i & 4 ? s : -s]);
-  const edges = [];
-  for (let a = 0; a < 8; a++) for (let b = a + 1; b < 8; b++) if (((a ^ b) & ((a ^ b) - 1)) === 0) edges.push([corners[a], corners[b]]);
-  const share = (f) => Math.floor(BODY * f);
-  const nEdge = share(0.46), nCorner = share(0.09), nFace = share(0.15);
-  for (let i = 0; i < nEdge; i++) {
-    const [p, q] = edges[(r() * edges.length) | 0], t = r();
-    out.push(p[0] + (q[0] - p[0]) * t + gauss(r) * 0.011, p[1] + (q[1] - p[1]) * t + gauss(r) * 0.011, p[2] + (q[2] - p[2]) * t + gauss(r) * 0.011, 0, 0.72 + 0.25 * r());
+// ---- 3D layers: even, thin, regular. sp is a cell in world units (kept off the very small, so counts stay in budget)
+const spacing = (ctx) => Math.max(ctx.cellWorld, 0.0025);
+
+export function cubeBody(ctx, seed = 21) {
+  const r = rng(seed), c = collector(), sp = spacing(ctx), s = 0.44;
+  const corner = (i) => [i & 1 ? s : -s, i & 2 ? s : -s, i & 4 ? s : -s];
+  // edges: a line two cells thick, tone 1 (bright)
+  for (let a = 0; a < 8; a++) for (let b = a + 1; b < 8; b++) {
+    const d = a ^ b;
+    if (d & (d - 1)) continue; // not an edge
+    const ax = d === 1 ? 0 : d === 2 ? 1 : 2, o1 = (ax + 1) % 3, o2 = (ax + 2) % 3, A = corner(a), n = Math.floor((2 * s) / sp);
+    for (let k = 0; k <= n; k++) for (let u = 0; u < 2; u++) for (let v = 0; v < 2; v++) {
+      const p = A.slice();
+      p[ax] = -s + (k / n) * 2 * s;
+      p[o1] += (u - 0.5) * sp;
+      p[o2] += (v - 0.5) * sp;
+      c.add(p[0], p[1], p[2], 0, 1);
+    }
   }
-  for (let i = 0; i < nCorner; i++) {
-    const c = corners[(r() * 8) | 0];
-    out.push(c[0] + gauss(r) * 0.04, c[1] + gauss(r) * 0.04, c[2] + gauss(r) * 0.04, 0, 0.9 + 0.09 * r());
+  // corners: a small cube of cells, bright
+  for (let i = 0; i < 8; i++) {
+    const A = corner(i);
+    for (let x = -2; x <= 2; x++) for (let y = -2; y <= 2; y++) for (let z = -2; z <= 2; z++) if (x * x + y * y + z * z <= 5) c.add(A[0] + x * sp, A[1] + y * sp, A[2] + z * sp, 0, 1);
   }
-  for (let i = 0; i < nFace; i++) {
-    const ax = (r() * 3) | 0, sg = r() < 0.5 ? -s : s, p = [(r() * 2 - 1) * s, (r() * 2 - 1) * s, (r() * 2 - 1) * s];
-    p[ax] = sg + gauss(r) * 0.008;
-    out.push(p[0], p[1], p[2], 0, 0.3 + 0.2 * r());
+  // faces: a skin, lit where a faint tone passes the blue-noise threshold on the face's own grid
+  const g = 1.6 * sp, m = Math.floor((2 * s) / g);
+  for (let ax = 0; ax < 3; ax++) for (const sg of [-1, 1]) for (let i = 0; i <= m; i++) for (let j = 0; j <= m; j++) {
+    if (!(0.2 > threshold(ctx.bn, i + 17 * ax + 31 * (sg + 1), j + 11 * ax))) continue;
+    const p = [0, 0, 0];
+    p[ax] = sg * s;
+    p[(ax + 1) % 3] = -s + (i / m) * 2 * s;
+    p[(ax + 2) % 3] = -s + (j / m) * 2 * s;
+    c.add(p[0], p[1], p[2], 0, 0.86 + 0.1 * r());
   }
-  while (!out.full()) out.push((r() * 2 - 1) * s, (r() * 2 - 1) * s, (r() * 2 - 1) * s, 0, 0.12 + 0.14 * r());
-  return sortByPlace(out.a, BODY);
+  // inside: a few, evenly (a low-discrepancy sequence, not noise)
+  for (let i = 1; i <= 5000; i++) c.add((((i * 0.7548776662) % 1) * 2 - 1) * s, (((i * 0.5698402909) % 1) * 2 - 1) * s, (((i * 0.6180339887) % 1) * 2 - 1) * s, 0, 0.8 + 0.1 * r());
+  return finish(c, r);
 }
 
-function unit(r) {
-  for (;;) {
-    const x = gauss(r), y = gauss(r), z = gauss(r), l = Math.hypot(x, y, z);
-    if (l > 1e-6) return [x / l, y / l, z / l];
-  }
-}
 const cross = (a, b) => [a[1] * b[2] - a[2] * b[1], a[2] * b[0] - a[0] * b[2], a[0] * b[1] - a[1] * b[0]];
+const norm = (v) => {
+  const l = Math.hypot(...v) || 1;
+  return v.map((x) => x / l);
+};
 
-export function sphereBody(seed = 31) {
-  const r = rng(seed), out = makeOut(BODY), R = 0.66;
-  const nSkin = Math.floor(BODY * 0.5), nVein = Math.floor(BODY * 0.4), nPool = Math.floor(BODY * 0.1);
-  for (let i = 0; i < nSkin; i++) {
-    const u = unit(r), k = R * (1 + gauss(r) * 0.01);
-    out.push(u[0] * k, u[1] * k, u[2] * k, 0, 0.28 + 0.2 * r());
+export function sphereBody(ctx, seed = 31) {
+  const r = rng(seed), c = collector(), sp = spacing(ctx), R = 0.66;
+  // skin: a Fibonacci lattice, even, a few per cent of the surface cells
+  const n = Math.min(32000, Math.floor((4 * Math.PI * R * R * 0.05) / (sp * sp)));
+  const ga = Math.PI * (3 - Math.sqrt(5));
+  for (let i = 0; i < n; i++) {
+    const y = 1 - ((i + 0.5) / n) * 2, rad = Math.sqrt(1 - y * y), th = ga * i;
+    c.add(Math.cos(th) * rad * R, y * R, Math.sin(th) * rad * R, 0, 0.86 + 0.1 * r());
   }
-  const veins = 8, per = Math.floor(nVein / veins);
-  for (let v = 0; v < veins; v++) {
-    let p = unit(r), t = cross(p, unit(r));
-    let tl = Math.hypot(...t) || 1;
-    t = t.map((x) => x / tl);
-    let drift = 0;
-    for (let j = 0; j < per; j++) {
-      const a = 0.0045; // a step along the great circle
+  // veins: walks along great circles that wander, two cells wide, bright
+  const unit = () => norm([r() - 0.5, r() - 0.5, r() - 0.5].map((x) => x + 1e-6));
+  for (let v = 0; v < 8; v++) {
+    let p = unit(), t = norm(cross(p, unit())), drift = 0;
+    const a = sp / R, steps = Math.min(1400, Math.floor(7 / a));
+    for (let j = 0; j < steps; j++) {
       const np = [0, 1, 2].map((k) => p[k] * Math.cos(a) + t[k] * Math.sin(a));
       const nt = [0, 1, 2].map((k) => -p[k] * Math.sin(a) + t[k] * Math.cos(a));
-      drift += gauss(r) * 0.006;
-      drift *= 0.97;
-      const c = cross(np, nt), b = drift;
+      drift = (drift + gauss(r) * 0.006) * 0.97;
+      const side = cross(np, nt);
       p = np;
-      t = [0, 1, 2].map((k) => nt[k] * Math.cos(b) + c[k] * Math.sin(b));
-      const k = R * (1 + gauss(r) * 0.004);
-      out.push(p[0] * k + t[0] * gauss(r) * 0.009, p[1] * k + t[1] * gauss(r) * 0.009, p[2] * k + t[2] * gauss(r) * 0.009, 0, 0.9 + 0.09 * r());
+      t = norm([0, 1, 2].map((k) => nt[k] * Math.cos(drift) + side[k] * Math.sin(drift)));
+      const sd = cross(p, t);
+      c.add(p[0] * R, p[1] * R, p[2] * R, 0, 1);
+      c.add(p[0] * R + sd[0] * sp, p[1] * R + sd[1] * sp, p[2] * R + sd[2] * sp, 0, 1);
     }
   }
-  const pools = 5;
-  for (let q = 0; q < pools; q++) {
-    const c = unit(r);
-    for (let j = 0; j < Math.floor(nPool / pools); j++) {
-      const u = [c[0] + gauss(r) * 0.08, c[1] + gauss(r) * 0.08, c[2] + gauss(r) * 0.08], l = Math.hypot(...u) || 1;
-      out.push((u[0] / l) * R, (u[1] / l) * R, (u[2] / l) * R, 0, 0.88 + 0.1 * r());
+  // pools: a disc of cells on the skin
+  for (let q = 0; q < 5; q++) {
+    const ctr = unit(), e1 = norm(cross(ctr, [0.3, 0.8, 0.5])), e2 = cross(ctr, e1), rad = 0.06, g = 1.2 * sp;
+    for (let x = -rad; x <= rad; x += g) for (let y = -rad; y <= rad; y += g) {
+      if (x * x + y * y > rad * rad) continue;
+      const p = norm([0, 1, 2].map((k) => ctr[k] + (e1[k] * x + e2[k] * y) / R));
+      c.add(p[0] * R, p[1] * R, p[2] * R, 0, 1);
     }
   }
-  haze(out, r, 0.006, 0.5);
-  return sortByPlace(out.a, BODY);
+  return finish(c, r);
 }
 
-export function columnBody(seed = 41) {
-  const r = rng(seed), out = makeOut(BODY);
-  const L = (() => { const v = [-0.55, 0.35, 0.75], l = Math.hypot(...v); return v.map((x) => x / l); })();
+export function columnBody(ctx, seed = 41) {
+  const r = rng(seed), c = collector(), sp = spacing(ctx), g = 1.5 * sp, yShift = 0.15;
+  const L = norm([-0.55, 0.35, 0.75]);
   const lit = (n) => Math.max(0, n[0] * L[0] + n[1] * L[1] + n[2] * L[2]);
-  const yShift = 0.15; // so the column sits in the middle of the screen
-  const share = (f) => Math.floor(BODY * f);
-  const accept = (tone, push) => { if (r() < Math.pow(tone, 0.8)) push(tone); };
-  // the shaft: tapered, fluted; density follows the light
-  for (let n = 0, tries = 0; n < share(0.52) && tries < 4e6; tries++) {
-    const th = r() * TAU, y = -0.78 + r() * 1.08, taper = 0.17 - (0.02 * (y + 0.78)) / 1.08;
-    const flute = 0.5 + 0.5 * Math.cos(16 * th), rad = taper * (1 - 0.06 * (1 - flute));
-    const slope = 0.55 * Math.sin(16 * th);
-    let nrm = [Math.cos(th) - Math.sin(th) * slope, 0, Math.sin(th) + Math.cos(th) * slope];
-    const l = Math.hypot(...nrm);
-    nrm = nrm.map((x) => x / l);
-    const tone = 0.04 + 0.96 * Math.pow(lit(nrm), 1.3) * (0.55 + 0.45 * flute);
-    accept(tone, (t) => { out.push(Math.cos(th) * rad, y + yShift, Math.sin(th) * rad, 0, 0.3 + 0.6 * t); n++; });
+  const bn = (i, j) => threshold(ctx.bn, i, j);
+  // the light is the threshold: a surface cell is lit when its tone passes the blue noise, so the shading is a dither
+  const surface = (i, j, tone, x, y, z) => {
+    if (tone * 1.25 > bn(i, j)) c.add(x, y + yShift, z, 0, 0.86 + 0.1 * r());
+  };
+  // the shaft: tapered, fluted
+  const nY = Math.floor(1.08 / g), nT = Math.floor((TAU * 0.17) / g);
+  for (let j = 0; j <= nY; j++) for (let i = 0; i < nT; i++) {
+    const y = -0.78 + (j / nY) * 1.08, th = (i / nT) * TAU, taper = 0.17 - (0.02 * (y + 0.78)) / 1.08;
+    const flute = 0.5 + 0.5 * Math.cos(16 * th), rad = taper * (1 - 0.06 * (1 - flute)), slope = 0.55 * Math.sin(16 * th);
+    const nrm = norm([Math.cos(th) - Math.sin(th) * slope, 0, Math.sin(th) + Math.cos(th) * slope]);
+    surface(i, j, 0.04 + 0.96 * Math.pow(lit(nrm), 1.3) * (0.55 + 0.45 * flute), Math.cos(th) * rad, y, Math.sin(th) * rad);
   }
   // the echinus: a flaring ring under the slab
-  for (let n = 0, tries = 0; n < share(0.08) && tries < 2e6; tries++) {
-    const th = r() * TAU, u = r(), y = 0.3 + 0.12 * u, rad = 0.17 + 0.08 * u * u;
-    const tone = 0.12 + 0.88 * lit([Math.cos(th), 0.3, Math.sin(th)].map((x, _, a) => x / Math.hypot(...a)));
-    accept(tone, (t) => { out.push(Math.cos(th) * rad, y + yShift, Math.sin(th) * rad, 0, 0.3 + 0.6 * t); n++; });
+  const nE = Math.floor(0.12 / g), nET = Math.floor((TAU * 0.21) / g);
+  for (let j = 0; j <= nE; j++) for (let i = 0; i < nET; i++) {
+    const u = j / nE, th = (i / nET) * TAU, rad = 0.17 + 0.08 * u * u;
+    surface(i + 40, j + 9, 0.12 + 0.88 * lit(norm([Math.cos(th), 0.3, Math.sin(th)])), Math.cos(th) * rad, 0.3 + 0.12 * u, Math.sin(th) * rad);
   }
   // the abacus: a thin slab, its top and four sides
-  for (let n = 0, tries = 0; n < share(0.12) && tries < 2e6; tries++) {
-    const side = (r() * 5) | 0, a = (r() * 2 - 1) * 0.3, b = (r() * 2 - 1) * 0.3, y = 0.42 + r() * 0.08;
-    let p, nrm;
-    if (side === 0) { p = [a, 0.5, b]; nrm = [0, 1, 0]; }
-    else if (side === 1) { p = [a, y, 0.3]; nrm = [0, 0, 1]; }
-    else if (side === 2) { p = [a, y, -0.3]; nrm = [0, 0, -1]; }
-    else if (side === 3) { p = [0.3, y, b]; nrm = [1, 0, 0]; }
-    else { p = [-0.3, y, b]; nrm = [-1, 0, 0]; }
-    const tone = 0.12 + 0.88 * lit(nrm);
-    accept(tone, (t) => { out.push(p[0], p[1] + yShift, p[2], 0, 0.3 + 0.6 * t); n++; });
+  const nA = Math.floor(0.6 / g), nH = Math.max(1, Math.floor(0.08 / g));
+  for (let i = 0; i <= nA; i++) {
+    for (let j = 0; j <= nA; j++) surface(i + 7, j + 21, 0.12 + 0.88 * lit([0, 1, 0]), -0.3 + (i / nA) * 0.6, 0.5, -0.3 + (j / nA) * 0.6);
+    for (let k = 0; k <= nH; k++) {
+      const y = 0.42 + (k / nH) * 0.08, a = -0.3 + (i / nA) * 0.6;
+      surface(i + 3, k + 5, 0.12 + 0.88 * lit([0, 0, 1]), a, y, 0.3);
+      surface(i + 29, k + 5, 0.12 + 0.88 * lit([0, 0, -1]), a, y, -0.3);
+      surface(i + 13, k + 5, 0.12 + 0.88 * lit([1, 0, 0]), 0.3, y, a);
+      surface(i + 37, k + 5, 0.12 + 0.88 * lit([-1, 0, 0]), -0.3, y, a);
+    }
   }
-  // the volutes: two spirals on each side of the capital, front and back
-  const nVol = share(0.1);
-  for (let i = 0; i < nVol; i++) {
-    const phi = r() * 2.6 * Math.PI, rad = 0.075 * Math.exp(-0.17 * phi), side = r() < 0.5 ? -1 : 1, z = r() < 0.5 ? 0.27 : -0.27;
-    const ang = side * phi + (side < 0 ? Math.PI : 0);
-    out.push(side * 0.255 + Math.cos(ang) * rad + gauss(r) * 0.006, 0.36 + yShift + Math.sin(ang) * rad + gauss(r) * 0.006, z + gauss(r) * 0.012, 0, 0.6 + 0.3 * r());
+  // the volutes: a spiral two cells wide, on each side, front and back, bright
+  for (const side of [-1, 1]) for (const z of [0.27, -0.27]) {
+    const steps = Math.floor(0.33 / sp), phiMax = 2.6 * Math.PI;
+    for (let k = 0; k <= steps; k++) {
+      const phi = (k / steps) * phiMax, rad = 0.075 * Math.exp(-0.17 * phi), ang = side * phi + (side < 0 ? Math.PI : 0);
+      for (let u = 0; u < 2; u++) c.add(side * 0.255 + Math.cos(ang) * rad + u * sp, 0.36 + yShift + Math.sin(ang) * rad, z, 0, 1);
+    }
   }
-  // the base: two rings
-  for (let i = 0, n = share(0.06); i < n; i++) {
-    const th = r() * TAU, ring = r() < 0.5 ? 0 : 1, rad = 0.2 + 0.03 * ring;
-    out.push(Math.cos(th) * rad, -0.77 + 0.03 * ring + yShift + gauss(r) * 0.005, Math.sin(th) * rad, 0, 0.3 + 0.4 * lit([Math.cos(th), 0.2, Math.sin(th)]));
+  // the base: two rings, bright
+  for (let ring = 0; ring < 2; ring++) {
+    const rad = 0.2 + 0.03 * ring, n = Math.floor((TAU * rad) / sp);
+    for (let k = 0; k < n; k++) {
+      const th = (k / n) * TAU;
+      c.add(Math.cos(th) * rad, -0.77 + 0.03 * ring + yShift, Math.sin(th) * rad, 0, 1);
+    }
   }
-  haze(out, r, 0.02, 0.5);
-  return sortByPlace(out.a, BODY);
+  return finish(c, r);
 }
 
-// ---- how each layer sits and moves in the world: a 3×3, column-major, yaw then pitch
+// ---- how each 3D layer sits and moves in the world: a 3×3, column-major, yaw then pitch. Flat layers do not turn: they lie on
+// the screen's grid, cell for cell. (The camera, which the drag turns, is separate.)
 function yawPitch(yaw, pitch) {
   const cy = Math.cos(yaw), sy = Math.sin(yaw), cx = Math.cos(pitch), sx = Math.sin(pitch);
-  // M = Rx(pitch) · Ry(yaw), written out; GLSL reads it column by column
-  return new Float32Array([cy, sx * sy, -cx * sy, 0, cx, sx, sy, -sx * cy, cx * cy]);
+  return new Float32Array([cy, sx * sy, -cx * sy, 0, cx, sx, sy, -sx * cy, cx * cy]); // Rx(pitch) · Ry(yaw)
 }
 export function rotation(name, t) {
   switch (name) {
-    case "ui": return yawPitch(0, 0); // the interface does not turn: it is where the DOM says it is
-    case "cosmos": return yawPitch(0.16 * Math.sin(t * 0.35), 0.05 * Math.sin(t * 0.27));
-    case "cube": return yawPitch(t * 0.35 + 0.6, 0.5 + 0.12 * Math.sin(t * 0.4));
-    case "sphere": return yawPitch(t * 0.22, 0.28);
-    case "column": return yawPitch(0.4 * Math.sin(t * 0.3), 0.04);
+    case "cube": return yawPitch(t * 0.3 + 0.6, 0.5 + 0.1 * Math.sin(t * 0.4));
+    case "sphere": return yawPitch(t * 0.2, 0.28);
+    case "column": return yawPitch(0.3 * Math.sin(t * 0.3), 0.04);
     default: return yawPitch(0, 0);
   }
 }
