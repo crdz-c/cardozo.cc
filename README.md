@@ -20,6 +20,7 @@ brands.js    the five brand marks as SVG path data
 raster.js    exact distance transform, corner rounding, blue-noise threshold map
 favicon.ico  the tab icon (16, 32, 48): the wordmark's C dissolving into pixels; favicon.png (64) and apple-touch-icon.png (180) too
 disk/        the CD, in the hero's dots, on a 3D disc you turn: cardozo.cc/disk (see /disk)
+swarm/       an experiment: one set of dots that moves between an interface, a picture and 3D shapes like a drone show, with a pixel setting: cardozo.cc/swarm (see /swarm)
 docs/        PLANKTON.md: the style's name, its laws, the two layers (surface and beneath), the shell, the animations, what exists and what is next
 tools/       make-favicon.py draws those three from the C's outline and the site's blue-noise map (needs Pillow and node)
              make-cd.py cleans the CD's sprite (takes the hand out of a photo of it; needs OpenCV and numpy); test.sh runs disk/'s and the docs' tests
@@ -371,6 +372,21 @@ it**: nothing on the home page links there (a test checks), it is reached by its
   sketch on a card; those, the engine's browser tests (WebGL, pointer, text) and `LEARNINGS.md` (what was learned and what was
   dropped) live whole on the branch `lab-pixel-media`, which is not on the domain. `disk/engine.js` and `disk/math.js` are copies of
   that branch's `lab/engine.js` and `lab/math.js`: change them there first.
+
+## /swarm
+
+An **experiment** (not the home's interface; docs/PLANKTON.md §14), unlisted like `/disk`: [cardozo.cc/swarm](https://cardozo.cc/swarm) is one set of
+98 304 dots that is told to become an interface, a picture, a cube, a sphere, a column, and **flies between them like a drone show**.
+Click (or tap, or Enter) for the next layer; `←` `→` or `1`–`5` to choose; drop any image on the page to make it the picture.
+
+- **Pixel setting.** The slider at the bottom right (or `[` and `]`, or `?pixel=0.5`): 0 is fine round dust, the references; 1 is
+  the screen's own grid, big square cells with a few lit and the grid faintly showing (`?gridlines=0` hides it).
+- **Built as the DOM and the canvas.** `swarm/index.html` is a real heading, paragraph and buttons, laid out by CSS; `swarm.js` reads
+  them, draws them to a 2D canvas and samples that into target positions. The dots live on the GPU (a position and a velocity
+  texture): each is a spring toward its target, leaving the old one at its own moment, in a wave from where you clicked.
+  `layers.js` (the targets) and `density.js` (the pixel setting) are pure maths with tests. Nothing scrolls.
+- **Tuning.** `?layer=cube`, `?pixel=…`, `?still` (reduced motion); in the console `__swarm.step(s)`, `.pause()`, `.goto(i, [x, y])`,
+  `.stats()`, `.shot()`.
 
 ## Deploy
 

@@ -9,7 +9,8 @@ exists and what does not (§8, §11), what the removed `/tebet` taught (§10), a
 - Code, comments, docs, commits: English. (Answers to Lucas: Brazilian Portuguese, per his global instructions.)
 - `README.md` specifies the home page and holds the file map; `docs/PLANKTON.md` specifies the style.
 - Pages: `/` (`hero.js`, its own shader) and `/disk` (3D; a copy of the lab's engine, whole lab on branch `lab-pixel-media`).
-  `/disk` is unlisted: nothing links to it, `noindex`. Those are the only two. A video page (`/tebet`) and a 2D module (`plankton/`)
+  `/disk` is unlisted: nothing links to it, `noindex`. `/swarm` is an unlisted **experiment** (docs §14): one set of dots that moves
+  between layers like a drone show, with a pixel setting from fine dust to the screen's grid; it is not the home's interface. A video page (`/tebet`) and a 2D module (`plankton/`)
   were built and then **removed, with the clip purged from history**, on Lucas's word (2026-11-08): neither may come back (a test
   checks). What they taught is docs §10.
 - Tests: `tools/test.sh` (node 18+, no dependencies). A test must be able to fail: break the code on purpose once and watch it (check

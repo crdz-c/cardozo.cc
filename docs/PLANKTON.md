@@ -13,6 +13,10 @@ interface every page carries, every animation with its numbers, what exists toda
 > is also purged from the repository's history ("Tebet sai", then "apaga e mantém só o /disk", 2026-11-08). §10 is what it
 > taught. Settled with Lucas: the two layers are **surface and beneath** (§3), and "no colour in the background" meant the grey
 > haze round a sheet, not a dark page. Open: the name, and what the next page is (§10).
+>
+> **Experiment in progress:** `/swarm` (§14), a different way to render everything (an interface, a picture, 3D) with one set of
+> dots that move between layers like a drone show, with a **pixel setting** from fine dust to the screen's grid. Unlisted, not the
+> home's interface.
 
 - [1. The name](#1-the-name)
 - [2. The laws](#2-the-laws)
@@ -27,6 +31,7 @@ interface every page carries, every animation with its numbers, what exists toda
 - [11. Status: what is not built](#11-status-what-is-not-built)
 - [12. Next explorations](#12-next-explorations)
 - [13. Checking things](#13-checking-things)
+- [14. Experiment: /swarm, one set of dots](#14-experiment-swarm-one-set-of-dots)
 
 ## 1. The name
 
@@ -242,6 +247,7 @@ Shared by every profile (the hero's shader is the reference; `disk/engine.js` ca
 |---|---|---|---|---|---|
 | **hero** | `/` | the wordmark + five brand marks beneath, as links | **is** the reference | `hero.js` (own inline shader), `index.html`, `style.css`, `brands.js`, `raster.js` | shipped |
 | **plate** | `/disk` | a picture on a card or a disc in **3D**, turned by drag | the field, sea, flicker, landing and wave; **no** pointer push, curtain, pulse or theme | `disk/` (a copy of the lab's `engine.js`, `math.js`) | shipped; the rest of the lab is on `lab-pixel-media` |
+| **swarm** | `/swarm` | one set of dots told to become an interface, a picture, a cube, a sphere, a column; click for the next | **not** the home's effects: a spring model, free specks at pixel 0, the screen's grid at pixel 1 | `swarm/` | experiment (§14) |
 
 The hero and the disk each carry their own copy of the shader, the build curve and the pointer; there is no shared module.
 Consolidating them is §12.
@@ -390,3 +396,64 @@ Written for a session that starts cold. The first two are not optional.
   count: all read back from the canvas in the page. Then look at an *upscaled* crop, not a downscaled screenshot (§10).
 - **Both themes, both pages, side by side**, with the pointer, a click, a hold and Tab on each (§9, step 5).
 - **Phone:** the pane's Mobile viewport, or `?debug&dpr=3` on the home.
+
+## 14. Experiment: /swarm, one set of dots
+
+Lucas's brief (2026-11-08), after sending seven references (a glass cube, a sphere with veins, a lit column, a cyclist of dust, a
+hand and an orb, a dithered cosmos, a sparse face): *render more kinds of thing, with movement; the background darker and less
+granular; test some in a localhost page; be organic and 3D; define how to render UI, 3D models, images and interactions so that
+they are consistent; we never scroll; each layer (curtain) of pixels renders its context, and **the pixels reorganise on the
+transitions, like a drone show**; swap what is shown at each click, to test the layer (loop)*. Then: **a setting for the pixel
+density**; at one end the references, at the other *just the screen's grid with a few pixels*.
+
+`swarm/` is that test. It is an **experiment**, not the home's interface: it does not carry the shell of §4, and at pixel 0 it
+breaks laws 1 and 3 on purpose (dots are free specks, not cells of one fixed dither). The comparison with the home is the point.
+
+### The model that makes the kinds of thing consistent
+
+**There is one set of dots (98 304) and nothing else.** A *layer* is a list of target positions for those same dots, in one 3D
+space, with a tone each (density carries the picture; law 2 still holds). The dots are never created or destroyed: a click tells
+them to go somewhere else. Every kind of content is just a different way of producing targets:
+
+| layer | where the targets come from | built from |
+|---|---|---|
+| **ui** | a bitmap of the page's real elements (heading, text, buttons), sampled in proportion to tone | the DOM (laid out by CSS, read with `getBoundingClientRect`, drawn to a 2D canvas, then sampled) |
+| **cosmos** | a picture, sampled by tone, with relief from tone (z) | a drawn picture, or **any image dropped on the page** (it stays on this machine) |
+| **cube**, **sphere**, **column** | points on edges, corners and faces; on a skin with veins; on a lit, fluted column (density follows a light) | maths (`swarm/layers.js`, no DOM) |
+| **dust** | the last 16 384 dots, the same in every layer: a sparse, dim background | the field's role, with far less grain than the home's |
+
+The interface layer is the DOM first (docs §3, rule 4): the buttons are real `<button>`s with their hover and focus, transparent
+(never hidden) while the canvas runs, `inert` while another layer is showing.
+
+### Movement: why it reads as a drone show
+
+- **Dot i in one layer is near dot i in the next**, in the same relative place: each layer's points are sorted by a Morton key
+  over its own bounding box, so the transition is a coherent flow and not a shuffle (a test measures it).
+- Each dot is a **spring** toward its target with its own stiffness and damping (a little overshoot, then it settles), and a
+  **swirl** while it is far from home, so paths curve. A dot in flight glows. Speed is limited.
+- Each dot leaves the old target **at its own moment**: a wave from where you clicked (0.34 s per world unit) plus noise (0.5 s).
+- It runs on the GPU (a position texture and a velocity texture, updated every frame) and **retargets at any moment**: click
+  again mid-flight and the swarm turns round.
+- On top: a pointer that is a hole in the dots with a push round it (moving it stirs more), a ring running out from each click,
+  a slow breath and twinkle per dot, a small camera that follows the pointer. `prefers-reduced-motion` (or `?still`): the dots
+  jump to their places and nothing moves.
+
+### The pixel setting
+
+One slider (and `[` / `]`, and `?pixel=0.5`), 0 to 1. **0** is the references: round soft specks, free on the screen. **1** is *the
+screen's grid with a few pixels*: big square cells (18 CSS px) snapped to the grid, one dot in twenty drawn, the grid itself
+faintly visible behind them (`?gridlines=0` hides it), the dust lifted so the few lit cells can be seen. In between, the cell
+grows geometrically and each step changes snap, squareness, thinning and brightness smoothly. Tone stays density at every
+setting: a cell adds up the dots that fall in it. The maths is `swarm/density.js` (pure, tested at both ends and for direction).
+
+### What it showed, and what is open
+
+- **Showed:** one dot set can be a UI, a picture and two kinds of 3D under the same rules, and the transition between any two is
+  the same trick, as the home's landing and curtain are (§6). The pixel setting works on all of them with no change to the layers.
+- **Open:** (1) is this the home's material or a sibling? (it has no lattice and no blue-noise threshold at pixel 0); (2) the
+  interface layer needs real states beyond hover (focus, press), and the 3D layers have no hit-testing yet; (3) text is the
+  browser's, rasterised: the home's pixel font (on `lab-pixel-media`) would be more native; (4) the cyclist and the face (dust
+  that falls apart, a figure out of a few dots) are not built: they are the same machinery with another source; (5) cost on a
+  phone is not measured.
+- **Check it:** `__swarm.step(s)`, `.pause()`, `.goto(i, [x, y])`, `.stats()` (lit share and mean level, read back) and `.shot()` are
+  in the console; the layers and the setting are tested by `tools/test.sh`.
