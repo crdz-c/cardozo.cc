@@ -411,6 +411,12 @@ deixa o mouse pra rotacionar 3D e fazer o drop da onda. O que precisa melhorar �
 apagassem e "caminhassem" até o próximo local, no caminho mais curto."* That is law 9 again (§2): the lookalike was the soft dust,
 and the home was right all along. Round 2 is what stands; the specks, the springs and the swirl are gone.
 
+**Round 3 (the same day): the walk, and the noise.** Lucas chose to refine the walk. Looking at round 2 mid-transition, 80 000 dots
+walking dim read as **a grey fog** (the cube dissolved into a cloud that condensed into the panel): nothing in it was a pixel
+walking. So the walk was redone so that a few can be followed (below). While it was being built he reminded me: *"na home tem ruído
+ao redor da página toda, nas novas animações não."* The field had been gathered round the middle, a Gaussian: it is now the
+home's own profile over the **whole page** (§ the model, field).
+
 `swarm/` is still an **experiment**, unlisted, and not the home's interface (it does not carry the shell of §4), but its look is now
 the home's.
 
@@ -427,7 +433,12 @@ map, true black. Tone is density (law 2); a dot's own brightness only flickers, 
 | **ui** | a panel of the page's real elements (card, heading, text, buttons): text and lines crisp, one cell thick; the fill a light dither | the DOM (laid out by CSS, read with `getBoundingClientRect`, drawn to a 2D canvas in device px, then dithered cell by cell) |
 | **picture** | a picture, dithered by tone (no lattice), relief from tone (z); **any image dropped on the page** (it stays on this machine) | a drawn picture, or the dropped one |
 | **cube**, **sphere**, **column** | even and thin: edges two cells wide, a skin at a fixed spacing (a Fibonacci lattice, a threshold on the blue noise), veins as walks, the column's **light as the threshold** so its shading is a dither | maths (`swarm/layers.js`, no DOM) |
-| **field** | the last 16 384 dots, in every layer: faint, free, gathered round the middle, 1.2 % of the cells (the home's field is faint, not sand) | the home's role |
+| **field** | the last 16 384 dots, in every layer, **over the whole page**: free blue noise, dim and cool, with the home's own profile (`fieldDensity`, hero.js `densityAt` and `lumC`: a floor everywhere, a swell round the middle, a little less in the top and bottom rows). It lies on the screen in no depth: the camera does not turn it, the fog does not dim it, it never walks | the home's role |
+
+The field's numbers were **measured on the home** (the `?debug` crop, in its calm phase, 1:1 cells) and matched: lit cells 1.6 % at the
+top-left edge, 2.5 % at the bottom right, 3.7 % just above the wordmark; the level of a lit dot ≈ 0.24 of full. `/swarm` draws
+`DUST_SHARE` 3 % of the cells (up to the 16 384 dots there are; on a very large screen it is thinner than the home's), at
+`0.44 × (0.9, 0.94, 1.0)`. A test pins the profile to hero.js's own lines.
 
 The flat layers are made by the home's rule: `lit if tone × 0.72 > blueNoise[cell mod 64] + 0.3 × (0.12 × lum + 0.004)` on lattice
 sites (`ditherBody`). They are built **for the screen's grid** (the cell, the canvas), so a dot is exactly where the home would put
@@ -436,13 +447,29 @@ while the canvas runs, `inert` while another layer shows; a hovered element's do
 
 ### The walk (the transition)
 
-Each dot, **at its own moment** (a wave from the centre, 0.34 s per world unit, plus up to 0.5 s of its own): **goes out** (it
-stutters, then dims), **walks to its place in the next layer along the shortest path, a straight line, a few cells at a time** (18
-hops a second, each dot on its own beat; the farther the longer, 0.45 to 1.6 s, never long), dim, and **lights with a flash when
-it arrives**, then follows its layer (a turning cube turns). There is no spring and no swirl: nothing overshoots or curves. Dot
-*i* of one layer is near dot *i* of the next (every layer is sorted by place, a Morton key over its own box; a test measures it),
-so the walks are short and read as flow, not shuffle. A dot that does not move (the field) does not walk. Switching mid-walk is
-fine: the walkers hold where they are and set off from there.
+Each dot, **at its own moment** (a wave from the centre, 0.34 s per world unit, plus up to 0.5 s of its own, measured on the dot's
+*own* place in the picture it is leaving, so you see the old picture go out from the middle): **goes out where it stands** (the
+first 14 % of its walk: lit less and less often, a stutter), then **walks to its place in the next layer along the shortest path,
+a straight line, a hop at a time** (18 hops a second, each dot on its own beat; the farther the longer, 0.45 to 1.6 s, never
+long), and **lights with a flash when it arrives**, then follows its layer (a turning cube turns). There is no spring and no swirl:
+nothing overshoots or curves. Dot *i* of one layer is near dot *i* of the next (every layer is sorted by place, a Morton key over
+its own box; a test measures it), so the walks are short and read as flow, not shuffle. A dot that does not move (the field) does
+not walk. Switching mid-walk is fine: the walkers hold where they are and set off from there.
+
+**What makes it followable (round 3).** Only **16 % of the dots, the carriers** (a hash of the dot, `walkers`), stay lit on the way,
+bright and even (0.95); **the others walk in the dark** (`dim` 0) and light up, with the flash, only where they land. Each carrier
+leaves **a trail: the three places it hopped from**, drawn fading (0.52, 0.29, 0.16), the same line, so a fast one is a dotted
+streak and a slow one is a pixel stepping; none when its hops are under half a cell. So between two pictures the screen is not a
+fog but about 10 000 lit pixels on straight lines with the field behind them: the old picture goes out from the middle, lights
+travel, the new one pops in from where they arrive. The trail is more vertices of the same dots (`gl_VertexID / N`), drawn only
+while something walks. Knobs, in the URL and live in `__swarm.walk`: `?hop=18` (hops a second), `?walkers=0.16`, `?pause=0.14`
+(the share of the walk spent going out), `?dim=0` (how lit the others are), `?trail=3`. The time and hops of a walk live in one
+snippet shared by the update and the draw (a test checks neither keeps its own copy).
+
+**Checked as numbers, read back from the GPU** (`__swarm.walkStats()`, ui → cube): carriers 15.8–16.1 % of the walkers at every
+moment; every walker within 0.00002 of a cell of the straight line between its two places and never outside the segment (0 of
+79 000); going out peaks at 0.4 s (30 000 dots), walking at 0.9 s (79 000, 12 600 of them lit), arrivals from 0.9 s, all settled
+by ~2.5 s. Reduced motion (`?still`) never walks: 98 304 of 98 304 settled at once.
 
 ### The mouse, the switch, the reference
 
@@ -469,7 +496,12 @@ blown-up picture: the layers are built again for it and **the pixels walk to the
   dithered in screen space as `/disk` does: which is right? (2) the panel's text is the browser's, rasterised: at the home's cell a
   16 px line is five cells tall; the home's pixel font (on `lab-pixel-media`) would be more native; (3) only the dark theme; (4) the
   cyclist and the face from the references (dust that falls apart, a figure out of a few dots) are not built; (5) the walk's
-  numbers (hops a second, speed, delay) are first guesses, tuned by eye on one screen; (6) cost on a phone is not measured.
+  numbers (hops a second, speed, delay, the carriers' share) are first guesses, judged from stills (the pane cannot show motion
+  to me): whether 18 hops a second *reads* as walking, and whether dark non-carriers are right or a faint 0.1 (`?dim=`) keeps the
+  picture more present, is for Lucas's eye; (6) the trails triple the vertices while something walks (0.16 → 0.45 ms of CPU
+  submit per frame on this Mac); on a phone it is not measured; (7) on a very large screen the field is thinner than the home's
+  (16 384 dots is all there are).
 - **Check it:** in the console `__swarm.step(s)`, `.pause()`, `.goto(i)`, `.wave([x, y])`, `.turn(yaw, pitch)`, `.setRef(on)`,
-  `.stats()` (lit share and mean level, read back), `.info()` and `.shot()`; the layers, the setting and the page's promises are
-  tested by `tools/test.sh`.
+  `.stats([x, y, w, h])` (lit share and mean level of the canvas or a CSS-px rectangle, read back; compare with the home's
+  `?debug` `__hero.crop`), `.walkStats()`, `.walk` (the knobs), `.info()` and `.shot()`; the layers, the setting and the page's
+  promises are tested by `tools/test.sh`. The pane may open at 0 × 0: call `.rebuild()` once it has a size.

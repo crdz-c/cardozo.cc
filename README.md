@@ -382,16 +382,19 @@ blue noise, true black), that is told to become the home's wordmark, a panel, a 
 - **Switch.** The ‹ › buttons (or `←` `→`, or `1`–`6`) change the layer. **Drag** turns the 3D layers (the flat ones tilt and spring
   back); a **click** drops the wave. Drop any image on the page to make it the picture. **R** (or the `ref` button) shows the real home
   in a frame over it, to compare.
-- **The walk.** Each dot, at its own moment, goes out, walks to its place in the next layer along the shortest path (a straight line, a
-  few cells at a time, dim) and lights with a flash when it arrives. No spring, no swirl.
+- **The walk.** Each dot, at its own moment (a wave from the middle of the picture it leaves), goes out where it stands, walks to its
+  place in the next layer along the shortest path (a straight line, a hop at a time) and lights with a flash when it arrives. A few
+  of them (16 %, the carriers) stay lit on the way and leave a fading trail of the places they hopped from; the rest walk in the
+  dark. No spring, no swirl. The field of noise is the home's, over the whole page, and never moves.
 - **Pixel setting.** The slider at the bottom right (or `[` and `]`, or `?pixel=0.5`) is the size of a cell: 0 is the home's own, 1 is
   the screen's grid, big cells with a few lit and the grid faintly showing (`?gridlines=0` hides it). The layers are built again for
   the new cell and the pixels walk to it.
 - **Built as the DOM and the canvas.** `swarm/index.html` is a real card, heading, text and buttons, laid out by CSS; `swarm.js` reads
   them, draws them to a 2D canvas and dithers that into target cells. The dots live on the GPU (a position texture and a "from +
   progress" texture). `layers.js` (the targets) and `density.js` (the pixel setting) are pure maths with tests. Nothing scrolls.
-- **Tuning.** `?layer=cube`, `?pixel=…`, `?still` (reduced motion); in the console `__swarm.step(s)`, `.pause()`, `.goto(i)`,
-  `.wave([x, y])`, `.turn(yaw, pitch)`, `.setRef(on)`, `.stats()`, `.info()`, `.shot()`.
+- **Tuning.** `?layer=cube`, `?pixel=…`, `?still` (reduced motion), and the walk: `?hop=18`, `?walkers=0.16`, `?pause=0.14`, `?dim=0`,
+  `?trail=3`; in the console `__swarm.step(s)`, `.pause()`, `.goto(i)`, `.wave([x, y])`, `.turn(yaw, pitch)`, `.setRef(on)`,
+  `.stats([x, y, w, h])`, `.walkStats()`, `.walk`, `.info()`, `.shot()`.
 
 ## Deploy
 

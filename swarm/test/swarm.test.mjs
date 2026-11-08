@@ -2,7 +2,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
-import { N, BODY, LAYERS, FLAT, W, H, CAMERA_D, DENS_L, rng, pack, unpack, scatter, dust, assemble, gridContext, cellCentre, ditherBody, cubeBody, sphereBody, columnBody, sortByPlace, rotation } from "../layers.js";
+import { N, BODY, LAYERS, FLAT, W, H, CAMERA_D, DENS_L, rng, pack, unpack, scatter, dust, fieldDensity, assemble, gridContext, cellCentre, ditherBody, cubeBody, sphereBody, columnBody, sortByPlace, rotation } from "../layers.js";
 import { HOME_CELL, GRID, DUST_SHARE, cellCss, cellPx, gapPx, gridAmount, dustKeep } from "../density.js";
 
 const root = new URL("../../", import.meta.url);
@@ -147,14 +147,29 @@ test("column: lit from the left, so the left half has more dots than the right",
   assert.ok(left > right * 1.1, `left ${left}, right ${right}`);
 });
 
-test("the field is faint, gathered round the middle, and a few per cent of the cells at most", () => {
-  const d = dust(1.6);
-  let near = 0;
-  for (let i = 0; i < d.length / 4; i++) { if (Math.hypot(d[i * 4] / 1.6, d[i * 4 + 1]) < 0.6) near++; }
-  assert.ok(near / (d.length / 4) > 0.45, "denser in the middle than a uniform scatter would be (0.28 of the area)");
-  const keep = dustKeep(ctx.cols, ctx.rows, d.length / 4);
-  assert.ok(keep * (d.length / 4) <= DUST_SHARE * ctx.cols * ctx.rows + 1, "the share of the cells lit is the setting's");
-  assert.ok(DUST_SHARE <= 0.02, "faint, not sand");
+test("the field is noise over the WHOLE page, as the home's: more in the middle, a third of it at the edges, a few per cent of the cells", () => {
+  const a = 1.6, d = dust(a), n = d.length / 4;
+  // a grid of tiles over the screen: every tile has dots (no empty edges), and the middle ones have the most
+  const TX = 8, TY = 6, tiles = new Array(TX * TY).fill(0);
+  for (let i = 0; i < n; i++) {
+    const tx = Math.min(TX - 1, Math.floor(((d[i * 4] / a + 1) / 2) * TX)), ty = Math.min(TY - 1, Math.floor(((d[i * 4 + 1] + 1) / 2) * TY));
+    tiles[ty * TX + tx]++;
+    assert.equal(d[i * 4 + 2], 0, "the field lies on the screen, in no depth: the camera does not turn it");
+  }
+  const lo = Math.min(...tiles), hi = Math.max(...tiles);
+  assert.ok(lo > 0 && lo / hi > 0.15, `the emptiest tile has ${lo}, the fullest ${hi}: noise reaches the edges`);
+  const centre = tiles[2 * TX + 3] + tiles[2 * TX + 4] + tiles[3 * TX + 3] + tiles[3 * TX + 4];
+  assert.ok(centre / 4 > hi * 0.6, "and the fullest are in the middle");
+  assert.ok(Math.abs(fieldDensity(0, 0, a) - 1) < 1e-9, "the profile peaks at the middle");
+  const edge = fieldDensity(a, 0, a), corner = fieldDensity(a, 1, a);
+  assert.ok(edge > 0.25 && edge < 0.5 && corner > 0.15 && corner < edge, `edges ${edge.toFixed(2)}, corner ${corner.toFixed(2)}: the home measured about 0.43 of the middle at the edge`);
+  // the profile is the home's own rule (copied; if the home changes, this fails and the copy must follow)
+  const hero = text("hero.js");
+  assert.match(hero, /\(0\.06 \+ 0\.94 \* fieldAt\(p\)\) \* \(0\.35 \+ 0\.65 \* calm\)/, "hero.js densityAt");
+  assert.match(hero, /lumC = \(0\.018 \+ 0\.05 \* D\)/, "hero.js lumC");
+  const keep = dustKeep(ctx.cols, ctx.rows, n);
+  assert.ok(keep * n <= DUST_SHARE * ctx.cols * ctx.rows + 1, "the share of the cells lit is the setting's");
+  assert.ok(DUST_SHARE >= 0.02 && DUST_SHARE <= 0.04, "about the home's mean: faint, not sand, not bare");
 });
 
 test("rotation: the flat layers do not turn (they lie on the grid); a cube does", () => {
@@ -217,10 +232,44 @@ test("the walk and the mouse: a straight line, hops, no spring; the click drops 
   const js = text("swarm/swarm.js");
   const update = js.match(/const UPDATE = `([\s\S]*?)`;/)[1];
   assert.match(update, /mix\(from, wn, pq\)/, "the shortest path: a straight line from where it left to where it goes");
-  assert.match(update, /floor\(min\(p, 1\.0\) \* K \+ h3\) \/ K/, "a few cells at a time, each dot on its own beat");
+  assert.match(update, /floor\(pw \* K \+ h3\) \/ K/, "a few cells at a time, each dot on its own beat");
   assert.ok(!/vel|spring|swirl|cross\(/.test(update), "no spring, no swirl: nothing overshoots or curves");
   assert.ok(!/^\s*addEventListener\("click"/m.test(js), "the window's click does not switch layer");
   assert.match(js, /dropWave\(ndcOf\(e\)\)/, "a click on empty space drops the wave");
   assert.match(js, /cam\.yaw \+= dx \* 0\.007/, "a drag turns");
   assert.match(js, /getElementById\("next"\)\.addEventListener\("click", \(\) => goto\(layerIdx \+ 1\)\)/, "the switch button changes layer");
+});
+
+test("the walk you can follow: they go out where they stand, a few stay lit and leave a trail, the others walk in the dark", () => {
+  const js = text("swarm/swarm.js");
+  const update = js.match(/const UPDATE = `([\s\S]*?)`;/)[1];
+  const draw = js.match(/const DRAW_V = `([\s\S]*?)`;/)[1];
+  // one walk for both shaders: the draw finds a dot's trail with the same time and hops the update moves it by
+  const walk = js.match(/const WALK = `([\s\S]*?)`;/)[1];
+  assert.match(walk, /float walkTime\(/);
+  assert.match(walk, /float walkHops\(/);
+  assert.ok(update.includes("${WALK}") && draw.includes("${WALK}"), "both shaders take the walk from the one place");
+  assert.ok(!/clamp\(cells/.test(update + draw), "nor does either keep a copy of its own");
+  // going out comes first: the dot stands for uPause of the walk, stuttering, before it moves
+  assert.match(update, /\(min\(p, 1\.0\) - uPause\) \/ \(1\.0 - uPause\)/, "the walk starts after the dot has gone out");
+  assert.match(draw, /float going = walking \* \(1\.0 - step\(uPause, p\)\)/);
+  assert.match(draw, /step\(fract\(u \* 9\.0 \+ h3\), 1\.0 - u\)/, "going out: lit less and less often");
+  // carriers: a share of the dots stays lit on the way; the rest are dark (uDim) and light up when they arrive
+  assert.match(draw, /bool carrier = h4 < uWalkers/);
+  assert.match(draw, /mix\(uDim \* b, 0\.95, float\(carrier\)\)/, "a carrier is lit and even; the others are uDim");
+  assert.match(js, /walkers: knob\("walkers", 0\.1\d?\d?,/, "a share well under half: you can tell them apart");
+  assert.match(js, /dim: knob\("dim", 0,/, "the others are dark by default");
+  // the trail: where the dot was one hop ago, two, three, from the same line; only for carriers, only while they walk
+  assert.match(draw, /int g = gl_VertexID \/ n/, "the trail is more vertices of the same dots");
+  assert.match(draw, /mix\(fr\.xyz, to\.xyz, max\(0\.0, to\.w - float\(g\) \/ K\)\)/, "the previous hops of the straight line");
+  assert.match(draw, /gone = gone \|\| !carrier \|\| onway < 0\.5/);
+  assert.match(js, /gl\.drawArrays\(gl\.POINTS, 0, N \* \(1 \+ \(since < WALK_SPAN && !reduce \? walk\.trail : 0\)\)\)/, "trails only while something walks, and never in reduced motion");
+  // the wave goes through the picture the dots are leaving (their own place), not the one they are going to
+  assert.match(update, /distance\(hold\.xy, uClick\)/);
+});
+
+test("the field is the page's noise: the camera does not turn it and the fog does not dim it", () => {
+  const draw = text("swarm/swarm.js").match(/const DRAW_V = `([\s\S]*?)`;/)[1];
+  assert.match(draw, /if \(field\) q = sp;/);
+  assert.match(draw, /uFog \* \(field \? 0\.0 : 1\.0\)/);
 });

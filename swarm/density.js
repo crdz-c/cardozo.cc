@@ -8,7 +8,7 @@
 // still density at every setting (law 2), and the pixels walk from the old cells to the new ones.
 export const HOME_CELL = 1.5; // CSS px: the home's cell at its biggest (hero.js: clamp(wordmark height / 80, 0, 1.5))
 export const GRID = 18; // CSS px: the cell at 1
-export const DUST_SHARE = 0.012; // share of the cells the field's dots light: the home's field is faint, not sand
+export const DUST_SHARE = 0.03; // share of the cells the field's dots light, over the whole page: the home's mean (hero.js: lumC = 0.018 + 0.05 × density; measured on the home: 1.6% at the top-left edge, 2.5% bottom right, 3.7% by the wordmark)
 
 const clamp01 = (x) => Math.min(1, Math.max(0, x));
 const smooth = (a, b, x) => {

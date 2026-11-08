@@ -5,10 +5,13 @@
 // blue-noise threshold, true black. The flat layers are made cell by cell with the home's own rule (layers.js ditherBody), so a
 // dot is where the home would put one; the 3D layers are even, thin and regular.
 //
-// The movement is a walk, not a spring. When you switch layer every dot, at its own moment (a wave from the centre, plus noise),
-// goes out, then walks to its place in the next layer along the shortest path (a straight line), a few cells at a time, dim,
-// and lights up with a flash when it arrives. Dot i of one layer is near dot i of the next (a sort by place), so the walks are short.
-// The dots live on the GPU: a position texture and a "from + progress" texture, updated every frame.
+// The movement is a walk, not a spring. When you switch layer every dot, at its own moment (a wave from the centre through the
+// picture it leaves, plus noise), goes out where it stands, then walks to its place in the next layer along the shortest path (a
+// straight line), a hop at a time, and lights up with a flash when it arrives. A few dots (the carriers) stay lit on the way and
+// leave a trail of the places they hopped from; the rest walk in the dark, so the eye can follow individual pixels instead of a fog.
+// Dot i of one layer is near dot i of the next (a sort by place), so the walks are short.
+// The dots live on the GPU: a position texture, a "from + progress" texture and a "to + hops" texture, updated every frame.
+// The field (the last dots) is the home's noise over the whole page: it never walks, the camera does not turn it.
 //
 // The mouse: drag turns the 3D layers (the flat ones tilt and spring back), a click drops the wave.
 import { N, W, H, BODY, LAYERS, FLAT, CAMERA_D, rng, dust, scatter, assemble, gridContext, ditherBody, cubeBody, sphereBody, columnBody, rotation } from "./layers.js";
@@ -228,18 +231,30 @@ void main() {
   gl_Position = vec4(p * 2.0 - 1.0, 0.0, 1.0);
 }`;
 
-// each dot: waits for its moment, goes out, walks a straight line to its place a few cells at a time, lights up when it arrives.
-// from.w is its progress: < 0 held where it is, 0 following the old layer, (0, 1) walking, 1 → 2 the flash after arriving, 2 settled
+// The walk, in one place for both shaders (the update moves the dots, the draw reads their trails): how long a dot takes to walk
+// the cells between its two places (the farther, the longer, but never long) and how many hops that is. A hop is a jump of a few
+// cells that the dot makes at its own beat; between two hops it stands.
+const WALK = `
+uniform float uHop; // hops a second
+float walkTime(float cells, float h2) { return clamp(cells / 110.0, 0.45, 1.6) * (0.85 + 0.3 * h2); }
+float walkHops(float T) { return max(1.0, floor(T * uHop)); }`;
+
+// each dot: waits for its moment (a wave from the centre, through the old picture), goes out where it stands, walks a straight
+// line to its place a hop at a time, and lights up with a flash when it arrives.
+// from.w is its progress: < 0 held where it is, 0 following the old layer, (0, uPause) going out in place, (uPause, 1) walking,
+// 1 → 2 the flash after arriving, 2 settled. The third target keeps where it is going and how far along the line it has hopped.
 const UPDATE = `#version 300 es
 precision highp float;
 precision highp int;
 uniform sampler2D tPos, tFrom, tPrev, tNext;
 uniform ivec2 uTex;
-uniform float uDt, uSince, uBody, uStill, uReset, uCellWorld;
+uniform float uDt, uSince, uBody, uStill, uReset, uCellWorld, uPause;
 uniform vec2 uClick;
 uniform mat3 uRotPrev, uRotNext;
+${WALK}
 layout(location = 0) out vec4 oPos;
 layout(location = 1) out vec4 oFrom;
+layout(location = 2) out vec4 oTo;
 float h11(float n) { return fract(sin(n * 12.9898) * 43758.5453); }
 void main() {
   ivec2 tc = ivec2(gl_FragCoord.xy);
@@ -252,16 +267,17 @@ void main() {
   vec3 wp = body ? uRotPrev * pv.xyz : pv.xyz;
   vec3 wn = body ? uRotNext * nx.xyz : nx.xyz;
   float h1 = h11(fi), h2 = h11(fi + 17.3), h3 = h11(fi + 41.7);
-  if (uStill > 0.5) { oPos = vec4(wn, nx.w); oFrom = vec4(wn, 2.0); return; }
+  if (uStill > 0.5) { oPos = vec4(wn, nx.w); oFrom = vec4(wn, 2.0); oTo = vec4(wn, 1.0); return; }
   float p = fr.w;
   vec3 from = fr.xyz;
   vec4 outPos = pos;
+  float pq = 0.0; // how far along the line it has hopped, 0…1
   if (uReset > 0.5) p = (p >= 1.0) ? 0.0 : -1.0;   // a new switch: the arrived follow the old layer, the walkers stay where they are
   if (p <= 0.0) {
     bool follow = p > -0.5;
     vec3 hold = follow ? wp : pos.xyz;
     float wcur = follow ? pv.w : pos.w;
-    float delay = distance(wn.xy, uClick) * 0.34 + h1 * 0.5;   // a wave from the switch, and a moment of each dot's own
+    float delay = distance(hold.xy, uClick) * 0.34 + h1 * 0.5;   // a wave from the switch through the picture it leaves, and a moment of each dot's own
     if (uSince > delay) {
       from = hold;
       outPos = vec4(hold, nx.w);
@@ -269,46 +285,69 @@ void main() {
     } else outPos = vec4(hold, wcur);
   } else if (p < 1.0) {
     float cells = length(wn - from) / uCellWorld;
-    float T = clamp(cells / 110.0, 0.45, 1.6) * (0.85 + 0.3 * h2);          // the farther, the longer, but never long
+    float T = walkTime(cells, h2);
     p += uDt / T;
-    float K = max(1.0, floor(T * 18.0));                                      // 18 hops a second: a few cells at a time
-    float pq = min(1.0, floor(min(p, 1.0) * K + h3) / K);                     // (each dot hops on its own beat)
+    float K = walkHops(T);
+    float pw = clamp((min(p, 1.0) - uPause) / (1.0 - uPause), 0.0, 1.0);    // it goes out where it stands first (uPause), then walks
+    pq = min(1.0, floor(pw * K + h3) / K);                                    // (each dot hops on its own beat)
     outPos = vec4(mix(from, wn, pq), nx.w);                                  // the shortest path: a straight line
     if (p >= 1.0) p = 1.0;
   } else {
     p = min(2.0, p + uDt / 0.5);
+    pq = 1.0;
     outPos = vec4(wn, nx.w);                                                  // arrived: it follows the layer (a turning cube turns)
   }
   oPos = outPos;
   oFrom = vec4(from, p);
+  oTo = vec4(wn, pq);
 }`;
 
 const DRAW_V = `#version 300 es
 precision highp float;
 precision highp int;
-uniform sampler2D tPos, tFrom;
+uniform sampler2D tPos, tFrom, tTo;
 uniform ivec2 uTex;
 uniform float uYaw, uPitch, uD, uAspect, uTime, uHover, uPtrE, uCell, uGap, uBody, uDustKeep, uFog, uWaveT;
+uniform float uCellWorld, uPause, uWalkers, uDim;
 uniform vec2 uView, uPtr, uWave;
+${WALK}
 out vec3 vCol;
 float h11(float n) { return fract(sin(n * 12.9898) * 43758.5453); }
 float pulse(vec2 d, float t) { // a ring that runs out, thins and fades
   return t < 0.0 ? 0.0 : exp(-pow((length(d) - t * 1.5) / 0.1, 2.0)) * exp(-t * 1.3);
 }
 void main() {
-  int id = gl_VertexID;
+  int n = uTex.x * uTex.y;
+  int g = gl_VertexID / n;          // 0: the dot itself; 1, 2, 3: the places it hopped from (its trail), drawn while it walks
+  int id = gl_VertexID - g * n;
   ivec2 tc = ivec2(id % uTex.x, id / uTex.x);
   vec4 s = texelFetch(tPos, tc, 0);
-  float p = texelFetch(tFrom, tc, 0).w;
+  vec4 fr = texelFetch(tFrom, tc, 0);
+  float p = fr.w;
   float fid = floor(s.w);
   float tone = s.w - fid;
   float fi = float(id);
-  float h1 = h11(fi), h2 = h11(fi + 17.3), h3 = h11(fi + 41.7);
+  float h1 = h11(fi), h2 = h11(fi + 17.3), h3 = h11(fi + 41.7), h4 = h11(fi + 93.1);
   bool field = fi >= uBody;
-  if (tone < 0.01 || (field && h1 > uDustKeep)) { gl_Position = vec4(2.0, 2.0, 2.0, 1.0); gl_PointSize = 0.0; vCol = vec3(0.0); return; }
+  bool carrier = h4 < uWalkers; // the few that stay lit on the way, so you can follow them; the rest walk in the dark
+  float walking = step(0.0001, p) * (1.0 - step(1.0, p));
+  float going = walking * (1.0 - step(uPause, p)); // going out where it stands
+  float onway = walking - going;
+  vec3 sp = s.xyz;
+  bool gone = tone < 0.01 || (field && h1 > uDustKeep);
+  if (g > 0) {
+    // a carrier's trail: where it was one hop ago, two hops ago, three (fading); nothing for the others, nor when it stands
+    vec4 to = texelFetch(tTo, tc, 0);
+    float cells = length(to.xyz - fr.xyz) / uCellWorld;
+    float K = walkHops(walkTime(cells, h2));
+    gone = gone || !carrier || onway < 0.5 || cells / K < 0.5;
+    sp = mix(fr.xyz, to.xyz, max(0.0, to.w - float(g) / K));
+  }
+  if (gone) { gl_Position = vec4(2.0, 2.0, 2.0, 1.0); gl_PointSize = 0.0; vCol = vec3(0.0); return; }
   float cy = cos(uYaw), sy = sin(uYaw), cx = cos(uPitch), sx = sin(uPitch);
-  vec3 q = vec3(cy * s.x + sy * s.z, s.y, -sy * s.x + cy * s.z);
+  vec3 q = vec3(cy * sp.x + sy * sp.z, sp.y, -sy * sp.x + cy * sp.z);
   q = vec3(q.x, cx * q.y - sx * q.z, sx * q.y + cx * q.z);
+  if (field) q = sp; // the field is the page's own noise: the camera does not turn it
   vec2 ndc = vec2(q.x / uAspect, q.y) * uD / (uD - q.z);
   vec2 a = vec2(uAspect, 1.0);
   // the pointer: a hole in the dots with a push round it; moving it stirs more
@@ -320,19 +359,21 @@ void main() {
   vec2 wd = (ndc - uWave) * a;
   float ring = pulse(wd, uWaveT) + 0.6 * pulse(wd, uWaveT - 0.2);
   ndc += (wd / (length(wd) + 1e-4)) * ring * 0.035 / a;
-  // brightness: the home's flicker, a walker dim, a flash on arriving, a hovered element steady
+  // brightness: the home's flicker; going out it stutters (lit less and less often); on the way a carrier is lit, bright and
+  // even, and the others are dark (uDim); a flash on arriving; a hovered element steady
   float flick = 0.5 + 0.5 * sin(uTime * (0.6 + 1.8 * h2) + h3 * 6.283);
   float b = tone * (1.0 - 0.4 * (1.0 - sqrt(flick)));
-  float fade = smoothstep(0.0, 0.12, p);
-  float blink = 1.0 - (1.0 - fade) * step(0.5, fract(p * 90.0)); // going out: it stutters, then dims
-  float walking = step(0.0001, p) * (1.0 - step(1.0, p));
-  b = mix(b, b * 0.55 * blink, walking * step(0.0, p));
+  float u = clamp(p / max(uPause, 0.001), 0.0, 1.0);
+  float lit = step(fract(u * 9.0 + h3), 1.0 - u);
+  b = mix(b, b * lit, going);
+  b = mix(b, mix(uDim * b, 0.95, float(carrier)), onway);
+  if (g > 0) b = 0.95 * pow(0.55, float(g));
   float flash = step(1.0, p) * (1.0 - step(2.0, p)) * (1.0 - (p - 1.0));
   b = min(1.0, b + 0.9 * flash * flash);
   if (fid > 0.5 && abs(fid - uHover) < 0.5) b = max(b, 0.95);
   b = min(1.0, b + 0.55 * min(ring, 1.0));
-  b *= hole * mix(1.0, clamp(0.72 + 0.55 * q.z, 0.4, 1.0), uFog);
-  vCol = (field ? vec3(0.9, 0.94, 1.0) * 0.4 : vec3(0.94, 0.935, 0.9)) * b;
+  b *= hole * mix(1.0, clamp(0.72 + 0.55 * q.z, 0.4, 1.0), uFog * (field ? 0.0 : 1.0));
+  vCol = (field ? vec3(0.9, 0.94, 1.0) * 0.44 : vec3(0.94, 0.935, 0.9)) * b; // (the home's field: cool dim greys, measured: mean level ÷ lit share ≈ 0.24)
   // the screen's grid: a dot is the whole cell it falls in, and off the lattice it steps onto it (the home's checkerboard)
   vec2 px = (ndc * 0.5 + 0.5) * uView;
   vec2 c = floor(px / uCell);
@@ -403,6 +444,17 @@ function start() {
     gl.texSubImage2D(gl.TEXTURE_2D, 0, 0, 0, W, H, gl.RGBA, gl.FLOAT, data);
   };
 
+  // ---- the walk's knobs (the URL sets them; __swarm.walk changes them live)
+  const knob = (name, d, lo, hi) => Math.min(hi, Math.max(lo, params.has(name) && params.get(name) !== "" && Number.isFinite(Number(params.get(name))) ? Number(params.get(name)) : d));
+  const walk = {
+    hop: knob("hop", 18, 4, 60), // hops a second
+    walkers: knob("walkers", 0.16, 0, 1), // the share of the dots that stay lit on the way: the ones you can follow
+    pause: knob("pause", 0.14, 0.02, 0.6), // the share of the walk spent going out where it stands
+    dim: knob("dim", 0, 0, 1), // how lit the others are on the way (0: dark)
+    trail: Math.round(knob("trail", 3, 0, 3)), // the hops a carrier remembers, drawn fading behind it
+  };
+  const WALK_SPAN = 4; // seconds: the longest wait (1.1) + the longest walk (1.9) + the flash (0.5), with room
+
   // ---- the world's state
   let read = 0, cur = 1; // state[read] is the latest; targets[cur] is the next layer, targets[1 − cur] the previous
   let prevName = "scatter", nextName = LAYERS[0], layerIdx = 0;
@@ -426,14 +478,15 @@ function start() {
   const scatterArr = () => assemble(scatter(), dust(G.ctx.aspect));
   const start0 = scatterArr();
   const state = [0, 1].map(() => {
-    const pos = f32(start0), from = f32(new Float32Array(N * 4));
+    const pos = f32(start0), from = f32(new Float32Array(N * 4)), to = f32(new Float32Array(N * 4));
     const fbo = gl.createFramebuffer();
     gl.bindFramebuffer(gl.FRAMEBUFFER, fbo);
     gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, pos, 0);
     gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT1, gl.TEXTURE_2D, from, 0);
-    gl.drawBuffers([gl.COLOR_ATTACHMENT0, gl.COLOR_ATTACHMENT1]);
+    gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT2, gl.TEXTURE_2D, to, 0);
+    gl.drawBuffers([gl.COLOR_ATTACHMENT0, gl.COLOR_ATTACHMENT1, gl.COLOR_ATTACHMENT2]);
     if (gl.checkFramebufferStatus(gl.FRAMEBUFFER) !== gl.FRAMEBUFFER_COMPLETE) throw new Error("incomplete framebuffer");
-    return { pos, from, fbo };
+    return { pos, from, to, fbo };
   });
   const targets = [f32(start0), f32(new Float32Array(N * 4))];
   gl.bindFramebuffer(gl.FRAMEBUFFER, null);
@@ -487,6 +540,8 @@ function start() {
     gl.uniform1f(upd.u.uStill, reduce ? 1 : 0);
     gl.uniform1f(upd.u.uReset, reset);
     gl.uniform1f(upd.u.uCellWorld, G.ctx.cellWorld);
+    gl.uniform1f(upd.u.uHop, walk.hop);
+    gl.uniform1f(upd.u.uPause, walk.pause);
     gl.uniform2f(upd.u.uClick, click[0], click[1]);
     gl.uniformMatrix3fv(upd.u.uRotPrev, false, rotation(prevName, time));
     gl.uniformMatrix3fv(upd.u.uRotNext, false, rotation(nextName, time));
@@ -521,6 +576,14 @@ function start() {
     gl.activeTexture(gl.TEXTURE1);
     gl.bindTexture(gl.TEXTURE_2D, state[read].from);
     gl.uniform1i(drw.u.tFrom, 1);
+    gl.activeTexture(gl.TEXTURE2);
+    gl.bindTexture(gl.TEXTURE_2D, state[read].to);
+    gl.uniform1i(drw.u.tTo, 2);
+    gl.uniform1f(drw.u.uCellWorld, ctx.cellWorld);
+    gl.uniform1f(drw.u.uHop, walk.hop);
+    gl.uniform1f(drw.u.uPause, walk.pause);
+    gl.uniform1f(drw.u.uWalkers, walk.walkers);
+    gl.uniform1f(drw.u.uDim, walk.dim);
     gl.uniform2i(drw.u.uTex, W, H);
     gl.uniform1f(drw.u.uYaw, FLAT.has(nextName) ? Math.max(-0.45, Math.min(0.45, cam.yaw)) : cam.yaw);
     gl.uniform1f(drw.u.uPitch, FLAT.has(nextName) ? Math.max(-0.45, Math.min(0.45, cam.pitch)) : cam.pitch);
@@ -538,7 +601,8 @@ function start() {
     gl.uniform2f(drw.u.uView, ctx.viewW, ctx.viewH);
     gl.uniform2f(drw.u.uPtr, ptr.has ? ptr.sx : 9, ptr.has ? ptr.sy : 9);
     gl.uniform2f(drw.u.uWave, wave[0], wave[1]);
-    gl.drawArrays(gl.POINTS, 0, N);
+    // the trails are only there while something walks (the switch is younger than the longest walk and its flash)
+    gl.drawArrays(gl.POINTS, 0, N * (1 + (since < WALK_SPAN && !reduce ? walk.trail : 0)));
     gl.disable(gl.BLEND);
   }
 
@@ -690,15 +754,55 @@ function start() {
     turn(yaw, pitch) { cam.yaw = yaw; cam.pitch = pitch; },
     info: () => ({ layer: nextName, from: prevName, since, pixel, cam: { ...cam }, waveT, cell: G.ctx.cell, cols: G.ctx.cols, rows: G.ctx.rows, dpr: G.dpr, reduce, time, ref: refOn }),
     /** lit share and mean level of the canvas, read back right after a draw (numbers before pictures) */
-    stats() {
+    stats(rect) { // rect: [x, y, w, h] in CSS px from the top left, or the whole canvas
       draw();
-      const { viewW, viewH } = G.ctx, px = new Uint8Array(viewW * viewH * 4);
-      gl.readPixels(0, 0, viewW, viewH, gl.RGBA, gl.UNSIGNED_BYTE, px);
+      const { viewW, viewH } = G.ctx, k = G.dpr;
+      const [x, y, w, h] = rect ? rect.map((v) => Math.round(v * k)) : [0, 0, viewW, viewH];
+      const px = new Uint8Array(w * h * 4);
+      gl.readPixels(x, viewH - y - h, w, h, gl.RGBA, gl.UNSIGNED_BYTE, px);
       let lit = 0, sum = 0;
-      for (let i = 0; i < viewW * viewH; i++) { const v = px[i * 4]; sum += v; if (v > 24) lit++; }
-      return { lit: lit / (viewW * viewH), mean: sum / (viewW * viewH) / 255 };
+      for (let i = 0; i < w * h; i++) { const v = Math.max(px[i * 4], px[i * 4 + 1], px[i * 4 + 2]); sum += v; if (v > 24) lit++; }
+      return { lit: +(lit / (w * h)).toFixed(4), mean: +(sum / (w * h) / 255).toFixed(4) };
     },
     shot() { draw(); return canvas.toDataURL(); },
+    walk,
+    /**
+     * the walk, as numbers read back from the GPU: how many dots are going out / walking / have arrived, how many of the walkers
+     * are carriers, and how far the walkers are from the straight line between their two places (in cells; must be ~0)
+     */
+    walkStats() {
+      const rb = gl.createFramebuffer(), out = {};
+      gl.bindFramebuffer(gl.FRAMEBUFFER, rb);
+      for (const k of ["pos", "from", "to"]) {
+        gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, state[read][k], 0);
+        out[k] = new Float32Array(N * 4);
+        gl.readPixels(0, 0, W, H, gl.RGBA, gl.FLOAT, out[k]);
+      }
+      gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+      gl.deleteFramebuffer(rb);
+      const cw = G.ctx.cellWorld, h11 = (n) => { const x = Math.sin(n * 12.9898) * 43758.5453; return x - Math.floor(x); };
+      let going = 0, walking = 0, carriers = 0, arrived = 0, settled = 0, maxOff = 0, maxT = 0, minT = 0, backwards = 0;
+      for (let i = 0; i < N; i++) {
+        const p = out.from[i * 4 + 3];
+        if (p >= 2) settled++;
+        else if (p >= 1) arrived++;
+        else if (p > 0.0001) {
+          if (p < walk.pause) { going++; continue; }
+          walking++;
+          if (h11(i + 93.1) < walk.walkers) carriers++;
+          const f = [0, 1, 2].map((a) => out.from[i * 4 + a]), t = [0, 1, 2].map((a) => out.to[i * 4 + a]), s = [0, 1, 2].map((a) => out.pos[i * 4 + a]);
+          const d = t.map((v, a) => v - f[a]), L2 = d[0] * d[0] + d[1] * d[1] + d[2] * d[2];
+          if (L2 < 1e-12) continue;
+          const u = s.map((v, a) => v - f[a]), k = (u[0] * d[0] + u[1] * d[1] + u[2] * d[2]) / L2;
+          const off = Math.hypot(...u.map((v, a) => v - k * d[a])) / cw;
+          if (off > maxOff) maxOff = off;
+          if (k > maxT) maxT = k;
+          if (k < minT) minT = k;
+          if (k < -1e-3 || k > 1 + 1e-3) backwards++;
+        }
+      }
+      return { going, walking, carriers, carrierShare: walking ? carriers / walking : 0, arrived, settled, offLineCells: maxOff, alongMin: minT, alongMax: maxT, outOfSegment: backwards };
+    },
   };
 }
 

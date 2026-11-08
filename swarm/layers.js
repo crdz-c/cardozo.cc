@@ -133,13 +133,31 @@ export function sortByPlace(a, count = a.length / 4) {
 }
 
 // ---- the field, and the scatter the dots start from
-/** The field: faint dots, free (no lattice), gathered round the middle and thinning to the edges, as the home's does (density.js dustKeep). */
+/**
+ * How many of the home's field cells are lit at a point of the screen, relative to the peak (hero.js: the share of lit cells is
+ * lumC = 0.018 + 0.05 × densityAt, and densityAt is a floor of 0.06 everywhere, a swell round the middle, a little less in the top
+ * and bottom rows). So the noise reaches the edges: there it is about a third of the middle's. x in [−aspect, aspect], y in
+ * [−1, 1], the screen's own coordinates.
+ */
+export function fieldDensity(x, y, aspect = 1.6) {
+  const ex = x / aspect, ey = y * 0.82; // (the home squeezes the swell a little in y)
+  const yv = (y + 1) / 2, t = Math.min(1, Math.max(0, Math.min(yv, 1 - yv) / 0.15));
+  const calm = t * t * (3 - 2 * t);
+  const D = (0.06 + 0.94 * Math.exp(-3 * (ex * ex + ey * ey))) * (0.35 + 0.65 * calm);
+  return (0.018 + 0.05 * D) / 0.068;
+}
+/**
+ * The field: faint dots, free (no lattice), laid over the WHOLE screen with the home's own profile: noise at the edges, more in the
+ * middle (rejection-sampled from fieldDensity). It lies on the screen, in no depth: the camera does not turn it, and it is the same
+ * in every layer. swarm.js draws only a share of it (density.js dustKeep).
+ */
 export function dust(aspect = 1.6, seed = 7) {
   const r = rng(seed);
   const a = new Float32Array((N - BODY) * 4);
   for (let i = 0; i < N - BODY; i++) {
-    const x = Math.max(-1.05, Math.min(1.05, gauss(r) * 0.5 + 0)) * aspect, y = Math.max(-1.05, Math.min(1.05, gauss(r) * 0.55));
-    a.set([x, y, (r() * 2 - 1) * 0.7, pack(0, 0.4 + 0.5 * r())], i * 4);
+    let x, y;
+    do { x = (r() * 2 - 1) * aspect; y = r() * 2 - 1; } while (r() > fieldDensity(x, y, aspect));
+    a.set([x, y, 0, pack(0, 0.4 + 0.5 * r())], i * 4);
   }
   return a;
 }
