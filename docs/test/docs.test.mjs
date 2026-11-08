@@ -9,7 +9,7 @@ const text = (p) => readFileSync(new URL(p, root)).toString();
 test("the docs name the style and carry their sections", () => {
   const doc = text("docs/PLANKTON.md");
   assert.match(doc, /^# Plankton/m);
-  for (const part of ["The laws", "Two layers", "surface and the beneath", "The shell", "Interface elements and their states", "The animations", "What exists", "Status: what is not built", "Next explorations", "Open questions for Lucas"]) {
+  for (const part of ["The laws", "Two layers", "surface and the beneath", "The shell", "Interface elements and their states", "The animations", "What exists", "Status: what is not built", "Next explorations", "Open questions for Lucas", "The home as an engine", "Parity: the home is the home"]) {
     assert.ok(doc.includes(part), `section: ${part}`);
   }
 });

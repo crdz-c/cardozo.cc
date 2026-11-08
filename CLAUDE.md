@@ -8,6 +8,9 @@ exists and what does not (§8, §11), what the removed `/tebet` taught (§10), a
 
 - Code, comments, docs, commits: English. (Answers to Lucas: Brazilian Portuguese, per his global instructions.)
 - `README.md` specifies the home page and holds the file map; `docs/PLANKTON.md` specifies the style.
+- **`hero.js` is the engine** (docs §15): the home, and any page as a *sheet* of the same shader, with the dots walking between
+  them (`walk.js`). **The home must not change when it does**: run `tools/home-parity.js` (README, *Pages*) in both themes and
+  get `identical: true`. No page ships yet (Lucas, 2026-11-08: the placeholder went); `?debug&demo` adds a throw-away one.
 - Pages: `/` (`hero.js`, its own shader) and `/disk` (3D; a copy of the lab's engine, whole lab on branch `lab-pixel-media`).
   `/disk` is unlisted: nothing links to it, `noindex`. `/swarm` is an unlisted **experiment** (docs §14): one set of dots, in the home's own look, that
   walks between the wordmark, a panel, a picture and 3D shapes, with a switch, a drag, a wave and a pixel setting; not the home's interface. A video page (`/tebet`) and a 2D module (`plankton/`)

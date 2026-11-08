@@ -15,7 +15,8 @@ appears, appears the way the loading does, only faster. No build step, no depend
 ```
 index.html   the page: the wordmark as inline SVG, each letter an <a> (the real links, focus, screen readers)
 style.css    layout; under .gl the SVG stays in place but transparent (the shader draws it)
-hero.js      letter/mark textures, the dot-field shader, morphs, curtain, 9 s cycle, pointer, waves, sea, loading
+hero.js      letter/mark textures, the dot-field shader, morphs, curtain, 9 s cycle, pointer, waves, sea, loading; and sheets: any page drawn by the same shader, and the walk between two (see Pages)
+walk.js      the walk between two sheets: pairing the lit dots by place, when each goes out and lands, which walk lit (pure maths, tested)
 brands.js    the five brand marks as SVG path data
 raster.js    exact distance transform, corner rounding, blue-noise threshold map
 favicon.ico  the tab icon (16, 32, 48): the wordmark's C dissolving into pixels; favicon.png (64) and apple-touch-icon.png (180) too
@@ -23,7 +24,9 @@ disk/        the CD, in the hero's dots, on a 3D disc you turn: cardozo.cc/disk 
 swarm/       an experiment: one set of dots, in the home's look, that walks between the wordmark, a panel, a picture and 3D shapes: cardozo.cc/swarm (see /swarm)
 docs/        PLANKTON.md: the style's name, its laws, the two layers (surface and beneath), the shell, the animations, what exists and what is next
 tools/       make-favicon.py draws those three from the C's outline and the site's blue-noise map (needs Pillow and node)
-             make-cd.py cleans the CD's sprite (takes the hand out of a photo of it; needs OpenCV and numpy); test.sh runs disk/'s and the docs' tests
+             make-cd.py cleans the CD's sprite (takes the hand out of a photo of it; needs OpenCV and numpy); test.sh runs the tests
+             home-parity.js hashes the home pixel for pixel (paste it in the console, see Pages)
+test/        the walk's maths and the engine's promises (node --test)
 CNAME        custom domain for GitHub Pages
 ```
 
@@ -47,6 +50,7 @@ animation frames), `buildProgress(s)` (the loading curve) and `finish()` (skip t
 `theme`, `touchState()` (the touch gesture state), `adapt(ms)` (feed a frame time to the adaptive quality) and `quality()`;
 also `shot()` (the composed screen as a PNG data URL), `cell()` and `dpr()`.
 `?debug&dpr=3` renders as if the screen were 3× (to check a phone's resolution in a desktop browser).
+`?debug&seed=7&freeze=6` makes the home the same every load (seeded `Math.random`, the clock and the choreography stopped): see Pages.
 The page loads no fonts: there is no text on screen.
 
 ## Letters are links
@@ -349,6 +353,22 @@ units (11.2 on small wordmarks) · `EDGE_REF` 90 · `EDGE_MIN` 0.45 · `HOLD_MS`
 `TOUCH_CURTAIN` 1.9 · `TOUCH_LIFT` 24 px · `ADAPT_MS` 26 · `ADAPT_MAX` 2 · `BRAND_ROUND` [4, 3] texels · `ROUND_OPEN` / `ROUND_CLOSE` 17 / 9 texels. Dark: ground `#000000`, dots `#f0efea`; light: ground `#ffffff`, dots `#000000`.
 
 Visual direction is inspired by christendijoux.com; the shader, motion and code here are original.
+
+## Pages
+
+`hero.js` draws more than the wordmark. A **sheet** is a texture layout (surface and beneath), a box on the screen and its columns;
+the wordmark is one, and a **page** is another: a `<section class="page" data-page="name">` in `index.html` (real words and links,
+laid out by CSS in a box that is always 90 : 50, sized from its width), drawn by **the same shader** with every effect the home has
+(pointer, curtain, wave, sea, flicker, theme), its links showing beneath as arrows under the curtain. A small arrow in the bottom-right
+corner (a real link, drawn in dots like the theme switch) opens it, and goes back. Between two sheets the dots of the old one go out
+from the middle, 16 % of them walk lit with a trail along straight lines, hopping, and the new one lands with a flash (`walk.js`).
+Pages are DOM first: with the script off `:target` opens one; without WebGL or with reduced motion there is no walk. **No page
+ships yet**, and no arrow: the HTML has a comment that shows how to add one. Everything is in docs/PLANKTON.md §15.
+
+The home must not change when `hero.js` does: open `/?debug&seed=7&freeze=6&theme=dark` (and `theme=light`) at 1024 × 768, dpr 2,
+and paste `tools/home-parity.js` in the console: it hashes the field and the composed canvas in four states and says
+`"identical":true` when all eight match the home as it was. `?debug&demo` adds a throw-away page and its arrow (`__hero.goTo("demo")`,
+`__hero.holdWalk(true, 1.5)` to stop the walk at a second).
 
 ## /disk
 

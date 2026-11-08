@@ -14,10 +14,14 @@ interface every page carries, every animation with its numbers, what exists toda
 > taught. Settled with Lucas: the two layers are **surface and beneath** (§3), and "no colour in the background" meant the grey
 > haze round a sheet, not a dark page. Open: the name, and what the next page is (§10).
 >
-> **Experiment in progress:** `/swarm` (§14): one set of dots, in the home's own look (cells, lattice, blue noise), that **walks**
-> between the home's wordmark, a panel, a picture and three 3D shapes along the shortest path, with a switch, a drag that turns
-> the 3D, a click that drops the wave, the real home as a reference, and a **pixel setting** from the home's cell to the screen's
-> grid. Unlisted, not the home's interface.
+> **The home is now an engine (§15).** Lucas, 2026-11-08: the new pages are to be *made from the home's own code*, with all its
+> effects and the links that show in the background, and a transition between them. `hero.js` now draws any **sheet** (the
+> wordmark is one; a page, built from real DOM, is another) with the same shader, and the dots of the old sheet **walk** to the
+> new one. The home is unchanged, pixel for pixel (a harness proves it, both themes); **no page ships yet** (a placeholder was
+> built and Lucas sent it away); `?debug&demo` adds a throw-away one. The arrow that opens a page is in the HTML when a page is.
+>
+> **Experiment, now superseded in its look but not removed:** `/swarm` (§14): one set of dots that walks between the wordmark, a
+> panel, a picture and three 3D shapes. It is where the walk was found; unlisted, not the home's interface.
 
 - [1. The name](#1-the-name)
 - [2. The laws](#2-the-laws)
@@ -33,6 +37,7 @@ interface every page carries, every animation with its numbers, what exists toda
 - [12. Next explorations](#12-next-explorations)
 - [13. Checking things](#13-checking-things)
 - [14. Experiment: /swarm, one set of dots](#14-experiment-swarm-one-set-of-dots)
+- [15. The home as an engine: sheets, pages and the walk](#15-the-home-as-an-engine-sheets-pages-and-the-walk)
 
 ## 1. The name
 
@@ -246,7 +251,7 @@ Shared by every profile (the hero's shader is the reference; `disk/engine.js` ca
 
 | profile | page | what it is | effects vs the home | files | state |
 |---|---|---|---|---|---|
-| **hero** | `/` | the wordmark + five brand marks beneath, as links | **is** the reference | `hero.js` (own inline shader), `index.html`, `style.css`, `brands.js`, `raster.js` | shipped |
+| **hero** | `/` | the wordmark + five brand marks beneath, as links; **and the engine that draws any other sheet** (§15) | **is** the reference | `hero.js` (own inline shader), `walk.js`, `index.html`, `style.css`, `brands.js`, `raster.js` | shipped; the engine is on `plankton-pages`, not merged |
 | **plate** | `/disk` | a picture on a card or a disc in **3D**, turned by drag | the field, sea, flicker, landing and wave; **no** pointer push, curtain, pulse or theme | `disk/` (a copy of the lab's `engine.js`, `math.js`) | shipped; the rest of the lab is on `lab-pixel-media` |
 | **swarm** | `/swarm` | one set of dots that walks between the home's wordmark, a panel, a picture, a cube, a sphere, a column | the home's look (cells, lattice, blue noise); **not** its effects: a walk, a wave, a drag | `swarm/` | experiment (§14) |
 
@@ -264,10 +269,11 @@ A checklist, in order. Steps 1 and 2 are the ones that get skipped and the ones 
    must be a fine page. Decide what lies **beneath** (§3): the page's interface, and which of it is a control.
 3. **Give the page a canvas** (`position: fixed; inset: 0; image-rendering: pixelated`, `aria-hidden`) and, when it runs, set a
    class on `<html>` (`gl`) that makes the DOM element `opacity: 0`: never `display: none`, never `visibility: hidden`.
-4. **Start from the home's code, not from memory of it.** There is no shared module (§11): copy the hero's shader chunks and
-   constants for the effects the page needs, or take `/disk`'s engine for a 3D plate. A lookalike was tried and rejected (§10).
+4. **Start from the home's code, not from memory of it.** For a 2D page that is now **a sheet in `hero.js`, not a copy** (§15:
+   a `<section class="page" data-page>` in `index.html`, and it has every effect the home has); for a 3D plate take `/disk`'s
+   engine (§11: there is no shared module with it). A lookalike was tried and rejected (§10).
 5. **Compare with the home before saying "the same".** Open both, in **both themes**, and use the pointer, the click, a hold and
-   Tab on each. Then run the parity test (§12 item 2: not written yet).
+   Tab on each. For anything that touches `hero.js`, run `tools/home-parity.js` (§15): the home must come out identical.
 6. **Tune with URLs.** Every look decision is a query parameter first; put the winners in the page's defaults.
 7. **Put the build's reasons in the page's header comment** (what is the DOM, what is the canvas).
 8. **Unlisted by default:** `noindex`, no link from the home page, and a test that says so (`/disk` has one, in
@@ -352,11 +358,12 @@ Said plainly, so the next session does not rediscover it.
 - **There is no shared module.** The hero and the disk each carry their own copy of the shader, the build curve and the pointer
   (`hero.js`, `disk/engine.js`, `disk/math.js`); a test pins the build curve between the disk's copy and nothing else. A new page
   starts from a copy (§9, step 4).
-- **No parity test against `hero.js`.** Nothing stops a shared constant or shader chunk drifting.
+- **Parity is checked for the home only** (§15, `tools/home-parity.js`, in a browser, by hand): nothing stops `/disk`'s copy of a
+  constant or shader chunk drifting from `hero.js`.
 - **Light theme exists only in the hero.**
-- **A sheet is a wordmark or a picture; it cannot yet be text from the DOM.** Printing real DOM text on demand (rasterise on
-  change, then print) is the missing half of "the UI renders the interface on demand". The pixel font and its word-by-word landing
-  exist, on `lab-pixel-media` (`lab/models/text.js`, Jersey 25).
+- **A sheet can be words from the DOM now, but only big, heavy ones (§15).** The home's shapes are fat (its edge ramp is ~3.6
+  cells), so a hairline or a 16 px line melts: a page's text has to be set like the wordmark. Small, legible running text is still
+  open; the pixel font and its word-by-word landing exist, on `lab-pixel-media` (`lab/models/text.js`, Jersey 25).
 - **Frame cost is not measured on a phone.**
 - **The home's README and shader disagree about `uLink`** (§5). Not fixed.
 
@@ -367,9 +374,9 @@ Written for a session that starts cold. The first two are not optional.
 1. **Choose the next page and write down its beneath** (§3), with the theme switch or without it. Nothing below should start
    before the page is the home's interface: it copies the home's code and shell, and is checked against §10's list, side by side in
    both themes.
-2. **Write the parity test**: the shared `const` lines and shader chunks of a page equal `hero.js`'s as text, with a short
-   allow-list of intended differences. It is the test that would have caught every row of §10's list, and the first step of the
-   next item.
+2. **Parity.** Done for the home itself (§15: `tools/home-parity.js`, eight hashes). Still to do: the same for `/disk`'s copy of
+   the shared constants and shader chunks, as text, with a short allow-list of intended differences; it is the test that would
+   have caught every row of §10's list, and the first step of the next item.
 3. **Controls beneath a media page** (deferred: Lucas said none for now, 2026-11-08). With the layers settled (§3) this is the
    natural beneath of a clip: sound, pause/play, replay as marks, each a real `<button>`, hit-testable on its own shape, revealed by
    the curtain and the wave like the home's links, and focusable by keyboard (a video has nothing focusable by itself).
@@ -381,8 +388,10 @@ Written for a session that starts cold. The first two are not optional.
    own". It is an **addition** to the home's effects, flagged as such (law 9).
 6. **Real DOM text, on demand.** Rasterise a heading or a list from the DOM when it changes, hand it as a sheet, land it word by
    word. First move: an `<h1>` as the sheet on a new page; prove the page works with the script off.
-7. **Several sheets, and a sheet as the beneath of another.** A rect array + an atlas; the curtain on one card showing another.
-8. **A page-to-page transition that is a melt.** The old page's last frame melts into the new page's first.
+7. **Several sheets on one screen, and a sheet as the beneath of another.** *Several sheets, one at a time: done (§15).* Still
+   open: two at once (a rect array + an atlas), and the curtain on one card showing another.
+8. **A page-to-page transition that is a melt.** *Done as a walk (§15), not a melt:* the old sheet's dots go out and walk to the
+   new one's. A melt of the shapes themselves (signed distances blended, as a letter into its mark) between two pages is open.
 9. **Audio into the sea.** An `AnalyserNode`'s level into `energy`; the button is a mark (3).
 10. **Colour as a token.** If colour is ever wanted, a small named set a design system could own. The home has none today.
 
@@ -392,7 +401,7 @@ Written for a session that starts cold. The first two are not optional.
   headings, that the README points here, that `tebet/` and `plankton/` stay gone). A test must be able to fail: break the code
   on purpose once and watch it (and check that the backup exists first).
 - **Debug:** on the home, `?debug` exposes `window.__hero` (README, *Develop*); `/disk` exposes `window.__lab` (`__lab.P` holds
-  every knob, live).
+  every knob, live). `?debug&seed=7&freeze=6` makes the home the same every load; `&demo` adds a throw-away page (§15).
 - **Numbers before pictures.** Ring brightness round a wave's centre, lit fraction and mean level of a crop, the cell size and
   count: all read back from the canvas in the page. Then look at an *upscaled* crop, not a downscaled screenshot (§10).
 - **Both themes, both pages, side by side**, with the pointer, a click, a hold and Tab on each (§9, step 5).
@@ -505,3 +514,102 @@ blown-up picture: the layers are built again for it and **the pixels walk to the
   `.stats([x, y, w, h])` (lit share and mean level of the canvas or a CSS-px rectangle, read back; compare with the home's
   `?debug` `__hero.crop`), `.walkStats()`, `.walk` (the knobs), `.info()` and `.shot()`; the layers, the setting and the page's
   promises are tested by `tools/test.sh`. The pane may open at 0 × 0: call `.rebuild()` once it has a size.
+
+## 15. The home as an engine: sheets, pages and the walk
+
+**The brief (Lucas, 2026-11-08, after round 3 of /swarm).** *"You should have used the cardozo.cc home as the base, which is how I
+already like it: the effects, everything, including the links that show in the background. You only have to copy it, and build the
+others from it. On the home there will be an arrow button to each page, and each page will be a part of my portfolio, but don't
+worry about that: carry on with the refinement, based on the home. Let's work already with its code, toward deploying the new
+version with this documentation."* Law 9 again (§2): `/swarm` drew its own dots (a particle system that only looked like the home);
+the home's own shader is the thing to build on. Then, on seeing the first placeholder page ("Work / Coming soon / Back"): *"tchau"*:
+it was taken out of the HTML at once. **No page ships.** What is on the branch is the engine that will carry them.
+
+### What changed in `hero.js`, and what did not
+
+The home is **pixel for pixel what it was** (below). The FIELD shader, the compose pass, every effect, the landing, the choreography,
+the theme, the touch gestures: untouched. Added:
+
+| | |
+|---|---|
+| **sheets** | the FIELD pass is a function of a *sheet* (`fieldPass(sheet, target)`): its two faces (surface, beneath: the home's texture layout, `buildMaskTexture`, now given a layout `{w, h, tpu}`; the home's is 90 × 15.75 units at 22 texels/unit), the box it fills on the screen, and its **columns**. The five letters' edges and centres were constants of the shader; they are `uColE[4]`, `uColC[5]` now (the wordmark's own numbers), so a sheet can be cut into other columns or into one |
+| **the field says what is the sheet's** | with `uAlpha` the field's alpha is 0 outside the sheet, 0.5 inside its shape where no dot is lit, 1 where one is (the halo of dots on a soft edge counts as the sheet's: when it did not, a ghost of the old letters stayed behind). With `uAlpha` 0, alpha is 1 as it always was |
+| **the walk** | `walk.js` (pure, tested) and two passes: `MIX` and the carriers (below) |
+| **the arrow** | a second icon in the compose pass, beside the theme switch's (`arrowSd`, `uGo`) |
+| **navigation** | `goTo(name)`, the hash, `showDom`; pages are `<section class="page" data-page>` |
+| **debug** | `?debug&seed=7&freeze=6` (same every load), `&demo` (a throw-away page); `__hero.pages()`, `.goTo(name)`, `.holdWalk(on, t)`, `.scene.probe(x, y, w, h)` |
+
+### A page
+
+A page is **real DOM first** (§3): a `<section class="page" data-page="name" id="name">` in `index.html` whose box is always 90 : 50
+and sized from its own width (`--pw`, so the sheet does not depend on the window), with its words (`data-t`) and links (`<a>`).
+Without the script, the arrow opens it by `:target` and the wordmark steps aside; with the script and no WebGL, `hero.js` does the
+same with `data-page` on `<html>`; with WebGL the section is transparent (never hidden: hit-testing, focus and screen readers keep
+working) and only the page shown is there (`.on`).
+
+Its **sheet** is that DOM drawn in the home's own texture layout (`buildPageMasks`): the words in heavy rounded strokes (900 weight
+plus a stroke: the home's shapes are fat, its edge ramp is a few cells wide, so a hairline would melt), and **beneath each link an
+arrow** (← for the back link), which the curtain, the wave and keyboard focus reveal exactly as they reveal the home's brand marks
+(§3: the beneath, in the surface's own dots). Checked in the pane: the curtain opens under the pointer with its oil-on-water rim and
+the arrow shows where the word `BACK` was. A page's links answer as the letters do (the pointer tightens, focus draws the dotted
+underline). A sheet built from a page takes ~130 ms on this Mac; they are built when the page is idle after the landing, so the first
+walk does not wait for it.
+
+**To add a page:** put its `<section>` (and the arrow `<a class="go" href="#name">` that opens it) in `index.html`, as the comment
+there shows; set its words big and heavy in CSS with `calc(var(--pw) * …)`; open it with `?debug&seed=7&freeze=6` and walk to it by
+hand (`__hero.goTo("name")`, `__hero.holdWalk(true, 1.5)`); run `tools/home-parity.js` on the home. The arrow's href becomes `#` on a
+page (back); with several pages the home needs one arrow each (a row of icons: not built).
+
+### The walk between two sheets
+
+FIELD draws **both** sheets, each as it looks on its own page (every effect acts on both). `MIX` then decides, cell by cell, which one
+shows: the old sheet's dot until its moment (it stutters out, lit less and less often), the new sheet's from the moment it lands
+(a flash that settles), and nothing in between; the field's noise is whichever sheet has no dot there. `walk.js` says **when**: the
+lit cells of the two sheets (read back from their own fields, untouched by the pointer) are sorted by place (a Morton key over each
+set's own box, so a small sheet and a big one are paired left with left, top with top) and paired, dot *i* of one with dot *i* of
+the other; the wave goes out from the middle of the old picture (0.68 s per screen height + up to 0.5 s of each dot's own), the dot
+goes out where it stands for 0.12 s, walks the straight line at 18 hops a second (0.45 to 1.6 s, the farther the longer), and lands.
+A dot lit in both sheets at the same cell does not move. Only **16 % of the dots, the carriers**, stay lit on the way, bright, each
+with a trail of the three places it hopped from (drawn over the composed screen, one cell each, on the same grid); the rest walk in
+the dark (found on `/swarm`, §14: 80 000 dots walking dim read as a grey fog). 8-bit time textures (one texel per cell) carry the
+moments; the carriers are `GL_POINTS` from static buffers, so nothing is read back per frame and the whole thing is WebGL1, as the
+home is. If the walk's shaders do not build, the home still runs and the page just opens. Reduced motion and no WebGL: no walk.
+
+Measured here (1024 × 768, dpr 2, cell 2 px, the demo page): ~13 000 pairs, ~1 900 carriers, 3.1 s, the start of a walk 60 ms (two
+field reads and the pairing), the page's sheet 128 ms. Frame cost during a walk is not measured on a phone.
+
+### The arrow
+
+The theme switch's twin, bottom right: a real 44 px `<a>` (the SVG is only the fallback), its icon drawn in the compose pass in
+dots, lit in with the switch, brighter on hover, a dotted underline on keyboard focus. It points → on the home and ← on a page, and
+its `href` follows. It is not in the HTML until there is a page to open.
+
+### Parity: the home is the home
+
+`tools/home-parity.js` (paste it into the console of `/?debug&seed=7&freeze=6&theme=dark`, and again with `theme=light`, at 1024 × 768
+and dpr 2) hashes the field and the composed canvas in four states: rest, every letter showing its mark (the beneath), a wave on its
+way, both. A change to `hero.js` that is meant to leave the home alone must leave all eight as they were. It was needed to be able
+to say "unchanged" at all: the first runs differed from load to load until `Math.random`, the clock and the choreography (whose
+morphs and pulse run on real time) were pinned, and a stray real pointer over the pane was blocked.
+
+| | rest | marks | marks + wave | wave |
+|---|---|---|---|---|
+| dark | 85f9c051 · 85a64ec | 26535fb1 · 17d3939 | f5f5ea77 · f1be1a6a | 6a864597 · 4c5b8873 |
+| light | dd9028aa · 8a659062 | c7e05df1 · 48c1e20f | 4b7c8b0b · b2165d9b | 78844ebb · fbbd87ae |
+
+(field · composed.) Identical after every step above, in both themes.
+
+### Checked, and not
+
+Checked in the pane: the home identical (above); the walk home → page → home by real clicks on the arrow and by the address (Back,
+a deep link `#name`); both themes (ink black on white, black carriers); a phone (375 wide: the page takes the width); the curtain on
+a page; no ghost of the old sheet (the lit share of the cells the old letters occupied, once they are gone: 3.93 %, the field's
+own, 3.92 %). `tools/test.sh`: the walk's maths (`test/walk.test.mjs`) and the engine's promises as text (`test/pages.test.mjs`),
+each shown to fail when the code is broken.
+
+**Open:** (1) **no page has content** and Lucas said not to worry about the portfolio; (2) small, running text does not survive the
+home's soft edges: a page's words have to be as big and heavy as the wordmark; (3) one arrow only, so several pages need a row of
+them; (4) the walk's feel (hop rate, the share of carriers, the dark non-carriers) is judged from stills; (5) the walk's cost on a
+phone, and the 60 ms at its start on a slow one; (6) touch: a tap on the arrow is a plain link (no first-tap reveal); (7) two sheets
+on screen at once, and a melt between two pages instead of a walk (§12 7, 8); (8) `/disk` is still its own copy of the shader (§11);
+(9) a visitor who opens `#name` gets the page's landing, not a walk from the home: nothing to walk from.

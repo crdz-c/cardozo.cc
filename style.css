@@ -353,6 +353,7 @@ a {
    modest, as the screen is already wide */
 @media (max-width: 699.98px) and (orientation: portrait) {
   .logo { width: calc(100vw - 2 * var(--pad)); }
+  .page { --pw: calc(100vw - 2 * var(--pad)); }
 }
 
 @media (max-width: 699.98px) and (orientation: landscape) {

@@ -37,6 +37,15 @@ if (query.has("debug") && query.has("seed")) {
   };
 }
 const FREEZE = query.has("debug") && query.has("freeze") ? Number(query.get("freeze")) : null;
+// debug only (?debug&demo): a throw-away page and the arrow to it, to see the walk and the page machinery while there is no real
+// page. It is not content and never ships in the HTML.
+if (query.has("debug") && query.has("demo")) {
+  hero.insertAdjacentHTML(
+    "beforeend",
+    `<a class="go" href="#demo" aria-label="Open the demo"><svg viewBox="0 0 22 22" aria-hidden="true"><path d="M3 11h15M12 4.5L18.5 11 12 17.5" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" /></svg></a>
+     <section class="page" data-page="demo" id="demo" aria-label="Demo"><h2 data-t>Demo</h2><a href="#" data-t data-back aria-label="Back to the home">Back</a></section>`
+  );
+}
 
 // (the two palettes live in the shader: true black + paper for dark, true white + true black for light)
 
@@ -2027,7 +2036,7 @@ if (scene) html.classList.add("gl");
 // The home is one sheet; every <section data-page> is another, and the arrow in the corner goes to it (and back). The pages are
 // DOM first: with the script off, `:target` shows one and hides the wordmark; with it on but without WebGL, the hash does the same;
 // with WebGL the dots of the old sheet walk to the new one (walk.js) and the DOM follows when they have landed.
-const pageEls = new Map([...document.querySelectorAll("[data-page]")].map((el) => [el.dataset.page, el]));
+const pageEls = new Map([...document.querySelectorAll(".page[data-page]")].map((el) => [el.dataset.page, el]));
 const logoEl = hero.querySelector(".logo");
 const FIRST_PAGE = pageEls.keys().next().value ?? null;
 const routeOf = () => {
@@ -2051,13 +2060,16 @@ function showDom(name) {
   if (document.activeElement?.closest?.("[inert]")) document.activeElement.blur(); // (focus must not stay on what can no longer be reached)
 }
 /** the page's sheet, built from its DOM the first time it is needed (a second or so: the shapes are measured, then drawn) */
+const sheetMs = {}; // how long each page's sheet took to build (ms), for the checks
 function ensureSheet(name) {
   if (!scene || name === "home" || scene.hasSheet(name)) return;
   const el = pageEls.get(name);
   const was = el.classList.contains("on");
+  const t = performance.now();
   el.classList.add("on"); // (a box with no layout has nothing to measure)
   scene.addSheet(name, buildPageMasks(el));
   el.classList.toggle("on", was);
+  sheetMs[name] = Math.round(performance.now() - t);
 }
 let leaving = false;
 let wanted = "home"; // where the visitor last asked to be (the address says so too): what a walk that ends must check
@@ -2092,6 +2104,28 @@ scene?.onWalkEnd((name) => {
   showDom(name);
   if (wanted !== name) goTo(wanted); // (the visitor went back or forward while it walked)
 });
+// a page's links answer as the letters do: the pointer tightens over one, keyboard focus draws a dotted underline under it
+pageEls.forEach((el) =>
+  el.querySelectorAll("a").forEach((a) => {
+    a.addEventListener("pointerenter", (e) => e.pointerType !== "touch" && (state.link = true));
+    a.addEventListener("pointerleave", (e) => e.pointerType !== "touch" && (state.link = false));
+    a.addEventListener("focus", () => {
+      if (!a.matches(":focus-visible")) return;
+      state.focusRect = a.getBoundingClientRect();
+      if (reduce) {
+        state.focusAmt = 1;
+        scene?.draw();
+      }
+    });
+    a.addEventListener("blur", () => {
+      state.focusRect = null;
+      if (reduce) {
+        state.focusAmt = 0;
+        scene?.draw();
+      }
+    });
+  })
+);
 window.addEventListener("hashchange", () => goTo(routeOf()));
 wanted = routeOf();
 if (routeOf() !== "home") {
@@ -2315,7 +2349,7 @@ if (new URLSearchParams(location.search).has("debug")) {
       tweenTo(state.go, 1, ICON_IN_MS, performance.now());
     },
     // the pages: where we are, a way to walk by hand (hold it, then set the second it is at), the sheets and the scene
-    pages: () => ({ shown, current: scene?.current(), walk: scene?.walkState(), canWalk: scene?.canWalk, routes: [...pageEls.keys()] }),
+    pages: () => ({ shown, current: scene?.current(), walk: scene?.walkState(), canWalk: scene?.canWalk, routes: [...pageEls.keys()], buildMs: sheetMs }),
     goTo,
     holdWalk: (on = true, t) => scene?.holdWalk(on, t),
     ensureSheet,
