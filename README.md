@@ -20,10 +20,14 @@ brands.js    the five brand marks as SVG path data
 raster.js    exact distance transform, corner rounding, blue-noise threshold map
 favicon.ico  the tab icon (16, 32, 48): the wordmark's C dissolving into pixels; favicon.png (64) and apple-touch-icon.png (180) too
 disk/        the CD, in the hero's dots, on a 3D disc you turn: cardozo.cc/disk (see /disk)
+docs/        PLANKTON.md: the style's name, its laws, the two layers (surface and beneath), the shell, the animations, what exists and what is next
 tools/       make-favicon.py draws those three from the C's outline and the site's blue-noise map (needs Pillow and node)
-             make-cd.py cleans the CD's sprite (takes the hand out of a photo of it; needs OpenCV and numpy); test.sh runs disk/'s tests
+             make-cd.py cleans the CD's sprite (takes the hand out of a photo of it; needs OpenCV and numpy); test.sh runs disk/'s and the docs' tests
 CNAME        custom domain for GitHub Pages
 ```
+
+The dots are a material with a name, **Plankton**, and the home and `/disk` are made of it. Its specification, the
+rules that make a thing Plankton and the next things to explore are in [docs/PLANKTON.md](docs/PLANKTON.md).
 
 ## Develop
 
