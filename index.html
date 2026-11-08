@@ -106,6 +106,22 @@
           </g>
         </svg>
       </button>
+
+      <!-- The arrow to the next page, and back from it. With WebGL the shader draws it as dots (this SVG is only the fallback); the
+           link itself stays for the pointer, the keyboard and screen readers. -->
+      <a class="go" href="#work" aria-label="Open work">
+        <svg viewBox="0 0 22 22" aria-hidden="true">
+          <path d="M3 11h15M12 4.5L18.5 11 12 17.5" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" />
+        </svg>
+      </a>
+
+      <!-- A page. The words are drawn as dots by hero.js (the sheet of a page, docs/PLANKTON.md §15); this is the page itself: real
+           text and links, laid out by CSS in a box that is always 90 : 50. With the script off, the link above opens it (:target). -->
+      <section class="page" data-page="work" id="work" aria-labelledby="work-h">
+        <h2 id="work-h" data-t>Work</h2>
+        <p data-t>Coming soon.</p>
+        <a href="#" data-t data-back aria-label="Back to the home">Back</a>
+      </section>
     </main>
 
     <script type="module" src="hero.js"></script>

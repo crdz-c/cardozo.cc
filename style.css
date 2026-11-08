@@ -235,6 +235,118 @@ a {
   outline: none;
 }
 
+/* ---------------------------------------------------------------- the arrow to the next page (and back)
+   The theme switch's twin, in the bottom-right corner: a 44 px target, the icon drawn by the shader in dots. */
+
+.go {
+  position: absolute;
+  bottom: calc(var(--pad) - 11px);
+  right: calc(var(--pad) - 11px);
+  z-index: 2;
+  display: none;
+  width: 44px;
+  height: 44px;
+  color: var(--fg);
+  cursor: pointer;
+  pointer-events: none;
+  -webkit-tap-highlight-color: transparent;
+}
+
+.js .go {
+  display: grid;
+  place-items: center;
+}
+
+.ready .go {
+  pointer-events: auto;
+}
+
+.walking .go,
+.walking .logo,
+.walking .page {
+  pointer-events: none; /* while the dots walk nothing can be pressed */
+}
+
+.go svg {
+  display: block;
+  width: 22px;
+  height: 22px;
+}
+
+.gl .go svg {
+  opacity: 0;
+}
+
+.gl .go:focus-visible {
+  outline: none;
+}
+
+/* ---------------------------------------------------------------- pages
+   A page is a section of real text and links, in a box that is always 90 : 50 and sized from its own width, so hero.js can draw it
+   as the wordmark is drawn (the same texture layout; docs/PLANKTON.md §15). With WebGL it is transparent (not hidden: hit-testing,
+   focus and screen readers keep working on it) and only the page shown is there (.on). Without the script, :target shows it and
+   hides the wordmark; with the script and no WebGL, hero.js does the same with data-page on <html>. */
+
+.page {
+  --pw: clamp(300px, 64vw, 900px);
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  z-index: 1;
+  display: none;
+  flex-direction: column;
+  justify-content: space-between;
+  align-items: flex-start;
+  width: var(--pw);
+  aspect-ratio: 90 / 50;
+  padding: calc(var(--pw) * 0.03);
+  transform: translate(-50%, -50%);
+  font-weight: 900;
+  text-transform: uppercase;
+  line-height: 1;
+}
+
+.page.on,
+.page:target {
+  display: flex;
+}
+
+.gl .page:not(.on) {
+  display: none;
+}
+
+.gl .page {
+  opacity: 0;
+}
+
+.page h2 {
+  font-size: calc(var(--pw) * 0.2);
+}
+
+.page p {
+  font-size: calc(var(--pw) * 0.06);
+}
+
+.page a {
+  font-size: calc(var(--pw) * 0.07);
+  line-height: 1.5;
+  cursor: pointer;
+}
+
+:root:not(.gl):has(.page:target) .logo,
+:root:not(.gl)[data-page]:not([data-page="home"]) .logo {
+  display: none;
+}
+
+.page a:focus-visible {
+  outline: 1px solid var(--fg);
+  outline-offset: 2px;
+}
+
+.gl .page a:focus-visible {
+  outline: none;
+}
+
 /* ---------------------------------------------------------------- small screens */
 
 /* a phone held upright: the wordmark nearly spans the screen (the margin is the page's own padding); held sideways it stays
@@ -291,7 +403,9 @@ a {
 @media (hover: hover) and (pointer: fine) {
   .gl.live body,
   .gl.live .logo .ln,
-  .gl.live .theme {
+  .gl.live .theme,
+  .gl.live .go,
+  .gl.live .page a {
     cursor: none;
   }
 }

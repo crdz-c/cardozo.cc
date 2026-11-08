@@ -6,4 +6,4 @@
 #   tools/test.sh
 set -e
 cd "$(dirname "$0")/.."
-node --test disk/test/*.test.mjs swarm/test/*.test.mjs docs/test/*.test.mjs
+node --test test/*.test.mjs disk/test/*.test.mjs swarm/test/*.test.mjs docs/test/*.test.mjs

@@ -26,6 +26,7 @@
     Object.assign(s.e, { on: false, str: 0, sv: 0, vx: 0, vy: 0 });
     Object.assign(s.cur, { amt: 0, rep: 0, rv: 0, vx: 0, vy: 0, tk: 0 });
     Object.assign(s, { nuc: 0, energy: 0, linkAmt: 0, focusAmt: 0 });
+    Object.assign(s.go, { amt: 0, dur: 0, hot: 0 }); // (the arrow to the next page is new: the home is compared without it)
   };
   const marks = (v) => H.letters.forEach((L) => { L.from = L.to = v; L.dur = 0; });
   const wave = (on) => { H.state.waves = on ? [{ x: innerWidth * 0.42, y: innerHeight * 0.5, t0: H.state.time - 0.9, k: 1 }] : []; };

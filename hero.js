@@ -12,6 +12,7 @@
 
 import { distanceTransform, roundCorners, blueNoise } from "./raster.js";
 import { BRANDS } from "./brands.js";
+import { pair, GLSL_WALK, HOP_RATE, TRAIL, SPAN, PAUSE_S, FLASH_S } from "./walk.js";
 
 const html = document.documentElement;
 const hero = document.getElementById("hero");
@@ -130,6 +131,7 @@ const state = {
   touchMode: false, // the latest pointer was a finger (the curtain grows and lifts, the mouse's ring and gradient go)
   nuc: 0, // the pointer ring's presence 0..1 (its dots light in at random, see the shader)
   tog: { amt: 0, from: 0, to: 0, t0: 0, dur: 0, hot: 0, hover: false, focus: false }, // the theme switch's icon: how lit, how hovered
+  go: { amt: 0, from: 0, to: 0, t0: 0, dur: 0, hot: 0, hover: false, focus: false }, // the arrow to the next page (or back): the same
   focusUI: null, // the on-screen button (the theme switch) with keyboard focus: the compose pass underlines it
   focusUIAmt: 0,
 };
@@ -209,7 +211,9 @@ function pauseCycle(now) {
 
 function updateLetters(now) {
   const idle = now - state.lastInput > IDLE_MS;
-  if (ready && !reduce && FREEZE === null) {
+  const atHome = shown === "home" && !scene?.walking(); // (the choreography is the wordmark's: it waits on a page and while walking)
+  if (!atHome && cycleStart !== null) pauseCycle(now);
+  if (ready && !reduce && FREEZE === null && atHome) {
     if (!idle) pauseCycle(now);
     else if (cycleStart === null && !revealAll) {
       cycleStart = now;
@@ -361,6 +365,7 @@ function stepTween(o, now) {
 }
 
 const themeBtn = hero.querySelector(".theme");
+const goBtn = hero.querySelector(".go"); // the arrow to the next page (or back): a real link, drawn in dots like the theme switch
 
 // ------------------------------------------------------------------ theme
 // Dark (true black) and light (true white). The first paint already has the right one (index.html). Switching is the
@@ -463,6 +468,40 @@ themeBtn.addEventListener("blur", () => {
   }
 });
 
+// the arrow to the next page (or back): the same states as the theme switch (hover brightens it, focus underlines it)
+if (goBtn) {
+  goBtn.addEventListener("pointerenter", (e) => {
+    if (e.pointerType === "touch") return;
+    state.link = true;
+    state.go.hover = true;
+  });
+  goBtn.addEventListener("pointerleave", (e) => {
+    if (e.pointerType === "touch") return;
+    state.link = false;
+    state.go.hover = false;
+  });
+  goBtn.addEventListener("focus", () => {
+    if (!goBtn.matches(":focus-visible")) return;
+    state.go.focus = true;
+    state.focusUI = goBtn;
+    if (reduce) {
+      state.focusUIAmt = 1;
+      state.go.hot = 1;
+      scene?.draw();
+    }
+  });
+  goBtn.addEventListener("blur", () => {
+    if (!state.go.focus) return;
+    state.go.focus = false;
+    if (state.focusUI === goBtn) state.focusUI = null;
+    if (reduce) {
+      state.focusUIAmt = 0;
+      state.go.hot = 0;
+      scene?.draw();
+    }
+  });
+}
+
 // ------------------------------------------------------------------ wordmark texture
 // The SVG paths are rasterised once, their corners rounded, and per texel we store:
 //   R coverage · G distance to the edge inside a letter · B closeness to a letter outside it.
@@ -470,6 +509,7 @@ const VBW = 90;
 const VBH = 15.75;
 const TEXELS_PER_UNIT = 22;
 const TEX_H = VBH * TEXELS_PER_UNIT; // texels per wordmark height
+const HOME_LAYOUT = { w: VBW, h: VBH, tpu: TEXELS_PER_UNIT }; // a sheet's drawing space, in units, and its texels per unit
 const HALO = 170; // texels: range of the outside distance (soft edges)
 const MARGIN = HALO + 10; // transparent border so outside distances fit and sampling past the edge reads 0
 const DEPTH = 55; // texels: range of the inside distance
@@ -507,9 +547,10 @@ const brandFit = LETTER_BRANDS.map((key, i) => {
 // Rasterise shapes (drawn by `draw(ctx)` in viewBox units) into the texture layout both faces share:
 //   R coverage · G distance to the edge inside · B closeness to a shape outside · A tone (0..1, drawn by
 //   `tone(ctx)` in greys; 1 where nothing is drawn). Corners are rounded first.
-function buildMaskTexture(draw, rOpen, rClose, tone) {
-  const cw = Math.round(VBW * TEXELS_PER_UNIT);
-  const ch = Math.round(VBH * TEXELS_PER_UNIT);
+function buildMaskTexture(draw, rOpen, rClose, tone, layout = HOME_LAYOUT) {
+  const TPU = layout.tpu;
+  const cw = Math.round(layout.w * TPU);
+  const ch = Math.round(layout.h * TPU);
   const tw = cw + MARGIN * 2;
   const th = ch + MARGIN * 2;
 
@@ -520,7 +561,7 @@ function buildMaskTexture(draw, rOpen, rClose, tone) {
   ctx.fillStyle = "#000";
   ctx.fillRect(0, 0, tw, th);
   ctx.translate(MARGIN, MARGIN);
-  ctx.scale(TEXELS_PER_UNIT, TEXELS_PER_UNIT);
+  ctx.scale(TPU, TPU);
   ctx.fillStyle = "#fff";
   draw(ctx);
 
@@ -532,13 +573,13 @@ function buildMaskTexture(draw, rOpen, rClose, tone) {
     ctx.fillStyle = "#fff";
     ctx.fillRect(0, 0, tw, th);
     ctx.translate(MARGIN, MARGIN);
-    ctx.scale(TEXELS_PER_UNIT, TEXELS_PER_UNIT);
+    ctx.scale(TPU, TPU);
     tone(ctx);
     tones = ctx.getImageData(0, 0, tw, th).data;
   }
   const raw = new Uint8Array(n);
   for (let i = 0; i < n; i++) raw[i] = rgba[i * 4] > 127 ? 1 : 0;
-  const solid = roundCorners(raw, tw, th, rOpen, rClose);
+  const solid = rOpen > 0 || rClose > 0 ? roundCorners(raw, tw, th, rOpen, rClose) : raw; // (no rounding asked: the shapes stay as drawn)
   const inside = distanceTransform(solid, tw, th, 0);
   const outside = distanceTransform(solid, tw, th, 1);
 
@@ -596,6 +637,65 @@ const buildBrandTexture = () =>
         })
       )
   );
+
+// ------------------------------------------------------------------ a page's sheet
+// A page is real DOM (a <section data-page> with words and links, laid out by CSS in a box of a fixed shape). Its sheet is that
+// DOM drawn in the home's own texture layout: the words in heavy rounded strokes (the home's shapes are fat: its edge ramp is a few
+// cells wide, so a hairline would melt away), and beneath each link an arrow, which the curtain and the wave reveal as they do
+// the home's brand marks. The box is PAGE_LAYOUT.w units wide, as the wordmark is 90; everything in the page is sized from its
+// width (CSS), so the sheet does not depend on the window.
+const PAGE_LAYOUT = { w: 90, h: 50, tpu: 11 };
+function buildPageMasks(el) {
+  const box = el.getBoundingClientRect();
+  const k = PAGE_LAYOUT.w / box.width; // units per CSS px
+  const words = [...el.querySelectorAll("[data-t]")].map((n) => {
+    const cs = getComputedStyle(n);
+    const range = document.createRange();
+    range.selectNodeContents(n);
+    const tr = range.getBoundingClientRect();
+    const text = cs.textTransform === "uppercase" ? n.textContent.trim().toUpperCase() : n.textContent.trim();
+    return { text, x: (tr.left - box.left) * k, y: (tr.top + tr.height / 2 - box.top) * k, size: parseFloat(cs.fontSize) * k, family: cs.fontFamily, spacing: (parseFloat(cs.letterSpacing) || 0) * k };
+  });
+  const arrows = [...el.querySelectorAll("a")].map((a) => {
+    const r = a.getBoundingClientRect();
+    return { x: (r.left + r.width / 2 - box.left) * k, y: (r.top + r.height / 2 - box.top) * k, size: Math.min(r.height, r.width) * k, back: a.hasAttribute("data-back") };
+  });
+  const face = buildMaskTexture(
+    (ctx) => {
+      ctx.textBaseline = "middle";
+      ctx.lineJoin = "round";
+      ctx.strokeStyle = "#fff";
+      for (const w of words) {
+        ctx.font = `900 ${w.size}px ${w.family}`;
+        if ("letterSpacing" in ctx) ctx.letterSpacing = `${w.spacing}px`;
+        ctx.lineWidth = w.size * 0.06;
+        ctx.strokeText(w.text, w.x, w.y);
+        ctx.fillText(w.text, w.x, w.y);
+      }
+    },
+    0, 0, null, PAGE_LAYOUT
+  );
+  const beneath = buildMaskTexture(
+    (ctx) => {
+      ctx.lineCap = "round";
+      ctx.lineJoin = "round";
+      ctx.strokeStyle = "#fff";
+      for (const a of arrows) {
+        const s = a.size * 0.5, d = a.back ? -1 : 1; // an arrow the height of its link: a shaft and a head
+        ctx.lineWidth = s * 0.3;
+        ctx.beginPath();
+        ctx.moveTo(a.x - s * d, a.y);
+        ctx.lineTo(a.x + s * d, a.y);
+        ctx.moveTo(a.x + s * d * 0.25, a.y - s * 0.65);
+        ctx.lineTo(a.x + s * d, a.y);
+        ctx.lineTo(a.x + s * d * 0.25, a.y + s * 0.65);
+        ctx.stroke();
+      }
+    },
+    0, 0, null, PAGE_LAYOUT
+  );
+  return { face, beneath, el };
+}
 
 // ------------------------------------------------------------------ shaders
 // Two passes. FIELD runs at one fragment per dither cell into a texture; COMPOSE runs at device pixels and
@@ -1084,8 +1184,10 @@ void main() {
   on *= step(DOT_FLOOR, on);
   // both palettes; a cell is in one or the other ('flip', above)
   float amtOn = on * clamp(tone, 0.0, 1.0);
-  // (the walk between two sheets needs to tell a lit dot of the sheet from the field's own: alpha is that, only when asked)
-  float ofSheet = on > 0.0 ? smoothstep(0.35, 0.65, max(letter, flash)) : 0.0;
+  // (the walk between two sheets needs to tell the sheet's own cells from the field's noise: alpha is that, only when asked.
+  // 0 outside the sheet, 0.5 inside its shape where no dot is lit, 1 where one is: the noise inside a letter's shape, and the halo
+  // of dots on its soft edge, are the sheet's: they go out with it, and a ghost of the old letters would stay if they did not)
+  float ofSheet = step(0.08, max(letter, flash)) * (on > 0.0 ? 1.0 : 0.5);
   gl_FragColor = vec4(mix(mix(BG_D, FG_D * tint, amtOn), mix(BG_L, FG_L * tint, amtOn), flip), mix(1.0, ofSheet, uAlpha));
 }
 `;
@@ -1099,6 +1201,9 @@ uniform float uCell;
 uniform vec4  uTog;       // theme switch icon: centre x, y (screen cells), radius (cells), lit 0..1
 uniform float uHot;       // how hovered / focused it is, 0..1
 uniform vec4  uUF;        // keyboard focus underline under it: centre x, y, radius (cells), amount
+uniform vec4  uGo;        // the arrow to the next page (or back): centre x, y (screen cells), radius (cells), lit 0..1
+uniform float uGoHot;     // how hovered / focused it is
+uniform float uGoDir;     // 1: it points right (to the page), -1: left (back)
 uniform vec3  uThemeT;    // the theme change: from, to (0 dark … 1 light), progress
 uniform vec3  uThemeO;    // …where it spreads from on the screen: x, y (device px), the farthest corner's distance
 uniform float uTime;
@@ -1142,13 +1247,27 @@ float sunSd(vec2 tp, float R) { // a small disc and eight short rays
   return max(0.4 * R - d, ray);
 }
 
+float segSd(vec2 p, vec2 a, vec2 b, float r) { // a round-ended stroke from a to b, half-width r (cells, + inside)
+  vec2 pa = p - a;
+  vec2 ba = b - a;
+  float h = clamp(dot(pa, ba) / dot(ba, ba), 0.0, 1.0);
+  return r - length(pa - ba * h);
+}
+float arrowSd(vec2 tp, float R) { // an arrow pointing right: a shaft and a head
+  float t = 0.17 * R;
+  float sd = segSd(tp, vec2(-0.85 * R, 0.0), vec2(0.8 * R, 0.0), t);
+  sd = max(sd, segSd(tp, vec2(0.85 * R, 0.0), vec2(0.15 * R, 0.62 * R), t));
+  return max(sd, segSd(tp, vec2(0.85 * R, 0.0), vec2(0.15 * R, -0.62 * R), t));
+}
+
 // the on-screen icon at this screen cell: rgb and alpha (0 = show the field)
 vec4 uiAt(vec2 cell) {
   vec2 c = cell + 0.5;
   float rT = uTog.z + 3.0;
   bool nearT = uTog.w > 0.002 && max(abs(c.x - uTog.x), abs(c.y - uTog.y)) < rT;
+  bool nearG = uGo.w > 0.002 && max(abs(c.x - uGo.x), abs(c.y - uGo.y)) < uGo.z + 3.0;
   bool nearF = uUF.w > 0.01 && abs(c.y - (uUF.y - uUF.z - 4.0)) < 1.0 && abs(c.x - uUF.x) < uUF.z;
-  if (!nearT && !nearF) return vec4(0.0);
+  if (!nearT && !nearG && !nearF) return vec4(0.0);
 
   // which palette this cell is in: the theme change spreading out from the switch, as in the scene
   float thT = hash12(cell + vec2(17.0, 43.0));
@@ -1159,8 +1278,11 @@ vec4 uiAt(vec2 cell) {
   float moonNow = 1.0 - step(0.5, flip); // a moon in the dark theme, a sun in the light one
 
   float sdT = nearT ? mix(sunSd(c - uTog.xy, uTog.z), moonSd(c - uTog.xy, uTog.z), moonNow) : -1000.0;
-  float cov = smoothstep(-ICON_EDGE, ICON_EDGE, sdT) * step(0.002, uTog.w);
-  float arrive = smoothstep(th2 - LIGHT_SOFT, th2 + LIGHT_SOFT, uTog.w * LIGHT_OVER - LIGHT_SOFT); // each dot lights at its own moment
+  float sdG = nearG ? arrowSd(vec2((c.x - uGo.x) * uGoDir, c.y - uGo.y), uGo.z) : -1000.0;
+  float lit = nearG ? uGo.w : uTog.w; // (the two icons are never within each other's reach)
+  float hot = nearG ? uGoHot : uHot;
+  float cov = smoothstep(-ICON_EDGE, ICON_EDGE, max(sdT, sdG)) * step(0.002, lit);
+  float arrive = smoothstep(th2 - LIGHT_SOFT, th2 + LIGHT_SOFT, lit * LIGHT_OVER - LIGHT_SOFT); // each dot lights at its own moment
 
   // the same material as the letters: dots on the checkerboard lattice in the dark theme, solid ink in the light one, the
   // edge a ramp of density the dots dither across, each dot twinkling and flickering at its own pace
@@ -1176,7 +1298,7 @@ vec4 uiAt(vec2 cell) {
   fk = fk * fk * (3.0 - 2.0 * fk);
   float fi = floor(fr);
   float flick = mix(hash12(cell + vec2(fi * 17.3, 5.0)), hash12(cell + vec2((fi + 1.0) * 17.3, 5.0)), fk);
-  float tone = TONE_L * (1.0 - 0.35 * TWINKLE * tw) * (1.0 - mix(FLICK_L, FLICK_L_INK, flip) * (1.0 - sqrt(flick))) * mix(0.8, 1.0, uHot);
+  float tone = TONE_L * (1.0 - 0.35 * TWINKLE * tw) * (1.0 - mix(FLICK_L, FLICK_L_INK, flip) * (1.0 - sqrt(flick))) * mix(0.8, 1.0, hot);
 
   // keyboard focus: a dotted underline under the focused icon
   if (nearF && mod(cell.x + cell.y, 2.0) < 0.5 && blue(cell) < uUF.w) {
@@ -1200,6 +1322,88 @@ void main() {
 }
 `;
 
+// The walk between two sheets (walk.js). Both sheets are drawn by FIELD, each as it looks on its own page; MIX then says, cell by
+// cell, which one shows: the old sheet's dot until its moment (it stutters out), the new sheet's from the moment it lands (with
+// a flash), and between them nothing; the field's own noise is whichever sheet has no dot there. The carriers, the few dots
+// that stay lit on the way, are drawn over the composed screen.
+const MIX = `
+precision highp float;
+uniform sampler2D uA;     // the old sheet's field (alpha: a lit dot of the sheet)
+uniform sampler2D uB;     // the new sheet's
+uniform sampler2D uOut;   // when the dot at each cell goes out, in 8 bits over uMix.y seconds (255: never)
+uniform sampler2D uArr;   // when a dot lands at each cell
+uniform vec2  uCells;
+uniform vec4  uMix;       // time since the walk began (s), the span of the 8-bit times (s), the flash (s), the pause going out (s)
+uniform vec3  uGround;
+uniform float uLight;     // 1 in the light theme (the dots are ink)
+float hash12(vec2 p) {
+  vec3 p3 = fract(vec3(p.xyx) * 0.1031);
+  p3 += dot(p3, p3.yzx + 33.33);
+  return fract((p3.x + p3.y) * p3.z);
+}
+void main() {
+  vec2 cell = floor(gl_FragCoord.xy);
+  vec2 uv = (cell + 0.5) / uCells;
+  vec4 a = texture2D(uA, uv);
+  vec4 b = texture2D(uB, uv);
+  float k = uMix.y * 255.0 / 254.0;
+  float tOut = texture2D(uOut, uv).r * k;
+  float tArr = texture2D(uArr, uv).r * k;
+  float t = uMix.x;
+  bool aIn = a.a > 0.25;   // the cell is inside the old sheet's shape (a dot of it, or the dark between its dots)
+  bool aLit = a.a > 0.75;  // …and a dot is lit
+  bool bIn = b.a > 0.25;
+  bool bLit = b.a > 0.75;
+  // what is there when neither sheet claims the cell: the field's noise (the old sheet's, or the new one's where the old one's
+  // shape was), or nothing
+  vec3 rest = !aIn ? a.rgb : (!bIn ? b.rgb : uGround);
+  vec3 col = rest;
+  if (aIn && t < tOut + uMix.w) {
+    float u = clamp((t - tOut) / uMix.w, 0.0, 1.0);          // going out: lit less and less often
+    bool shown = !aLit || step(fract(u * 9.0 + hash12(cell + vec2(7.0, 3.0))), 1.0 - u) > 0.5;
+    col = shown ? a.rgb : rest;
+  } else if (bIn && t >= tArr) {
+    float f = exp(-(t - tArr) / uMix.z) * (bLit ? 1.0 : 0.0); // landed: a flash that settles
+    col = mix(b.rgb, uLight > 0.5 ? vec3(0.0) : vec3(0.9412, 0.9373, 0.9176), 0.85 * f);
+  }
+  gl_FragColor = vec4(col, 1.0);
+}
+`;
+
+const CARRY_VS = `
+attribute vec2 aFrom;     // where the walker leaves from and where it goes, in cells
+attribute vec2 aTo;
+attribute vec4 aPar;      // when it sets off (s), its own two numbers
+uniform float uT;         // time since the walk began (s)
+uniform float uPause;
+uniform float uGhost;     // 0: the walker; 1, 2, 3: where it was one, two, three hops ago
+uniform float uCell;
+uniform vec2  uDev;
+${GLSL_WALK}
+varying float vB;
+void main() {
+  float cells = length(aTo - aFrom);
+  float T = walkTime(cells, aPar.y);
+  float p = (uT - aPar.x) / T;
+  float K = walkHops(T);
+  float pq = min(1.0, floor(clamp(p, 0.0, 1.0) * K + aPar.z) / K);   // each walker hops on its own beat
+  float walking = step(0.0, p) * step(p, 1.0);
+  float show = walking * (uGhost < 0.5 ? 1.0 : step(0.5, cells / K));  // a trail only where a hop is at least half a cell
+  vec2 c = floor(mix(aFrom, aTo, max(0.0, pq - uGhost / K)) + 0.5);
+  vec2 ndc = ((c + 0.5) * uCell / uDev) * 2.0 - 1.0;
+  gl_Position = show > 0.5 ? vec4(ndc, 0.0, 1.0) : vec4(2.0, 2.0, 2.0, 1.0);
+  gl_PointSize = uCell;
+  vB = 0.95 * pow(0.55, uGhost);
+}
+`;
+const CARRY_FS = `
+precision highp float;
+uniform vec3 uGround;
+uniform vec3 uFg;
+varying float vB;
+void main() { gl_FragColor = vec4(mix(uGround, uFg, vB), 1.0); }
+`;
+
 // ------------------------------------------------------------------ WebGL
 function createScene() {
   const gl = canvas.getContext("webgl", { antialias: false, alpha: false, powerPreference: "high-performance" });
@@ -1211,20 +1415,24 @@ function createScene() {
     gl.compileShader(s);
     return gl.getShaderParameter(s, gl.COMPILE_STATUS) ? s : (console.warn(gl.getShaderInfoLog(s)), null);
   };
-  const program = (fragSrc) => {
-    const vs = compile(gl.VERTEX_SHADER, VERT);
+  const program = (fragSrc, vertSrc = VERT, attribs = ["position"]) => {
+    const vs = compile(gl.VERTEX_SHADER, vertSrc);
     const fs = compile(gl.FRAGMENT_SHADER, fragSrc);
     if (!vs || !fs) return null;
     const p = gl.createProgram();
     gl.attachShader(p, vs);
     gl.attachShader(p, fs);
-    gl.bindAttribLocation(p, 0, "position");
+    attribs.forEach((a, i) => gl.bindAttribLocation(p, i, a));
     gl.linkProgram(p);
     return gl.getProgramParameter(p, gl.LINK_STATUS) ? p : null;
   };
   const field = program(FIELD);
   const compose = program(COMPOSE);
   if (!field || !compose) return null;
+  // (the walk between sheets is an addition: if its shaders do not build, the home still runs, and the page links just open)
+  const mixer = program(MIX);
+  const carry = program(CARRY_FS, CARRY_VS, ["aFrom", "aTo", "aPar"]);
+  const canWalk = !!(mixer && carry);
 
   const buf = gl.createBuffer();
   gl.bindBuffer(gl.ARRAY_BUFFER, buf);
@@ -1244,14 +1452,18 @@ function createScene() {
   };
 
   // unit 0: wordmark (letter faces) · 1: blue noise · 3: the field (render target) · 4: brand faces
+  // (a sheet's two faces, surface and beneath, are drawn from the same texture layout: buildMaskTexture)
+  const uploadFace = (m, unit) => {
+    const t = texture(unit, gl.LINEAR, gl.CLAMP_TO_EDGE);
+    gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, true);
+    gl.pixelStorei(gl.UNPACK_ALIGNMENT, 4);
+    gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, m.tw, m.th, 0, gl.RGBA, gl.UNSIGNED_BYTE, m.data);
+    return t;
+  };
   const wm = buildWordmarkTexture();
-  texture(0, gl.LINEAR, gl.CLAMP_TO_EDGE);
-  gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, true);
-  gl.pixelStorei(gl.UNPACK_ALIGNMENT, 4);
-  gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, wm.tw, wm.th, 0, gl.RGBA, gl.UNSIGNED_BYTE, wm.data);
+  const wmTex = uploadFace(wm, 0);
   const br = buildBrandTexture();
-  texture(4, gl.LINEAR, gl.CLAMP_TO_EDGE);
-  gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, br.tw, br.th, 0, gl.RGBA, gl.UNSIGNED_BYTE, br.data);
+  const brTex = uploadFace(br, 4);
 
   texture(1, gl.NEAREST, gl.REPEAT);
   gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, false);
@@ -1261,10 +1473,21 @@ function createScene() {
   // unit 3: the field (render target)
   const fieldTex = texture(3, gl.NEAREST, gl.CLAMP_TO_EDGE);
   const fbo = gl.createFramebuffer();
+  // the walk: the old sheet's field (unit 5) and the new one's (6) are render targets, and when each cell goes out (2) and
+  // lands (7) are 8-bit textures, one texel per cell
+  const aTex = texture(5, gl.NEAREST, gl.CLAMP_TO_EDGE);
+  const bTex = texture(6, gl.NEAREST, gl.CLAMP_TO_EDGE);
+  const outTex = texture(2, gl.NEAREST, gl.CLAMP_TO_EDGE);
+  const arrTex = texture(7, gl.NEAREST, gl.CLAMP_TO_EDGE);
+  const fboA = gl.createFramebuffer();
+  const fboB = gl.createFramebuffer();
+  const carryBuf = { from: gl.createBuffer(), to: gl.createBuffer(), par: gl.createBuffer() };
 
   const locs = (p, names) => Object.fromEntries(names.map((n) => [n, gl.getUniformLocation(p, n)]));
   const UF = locs(field, ["uDev", "uE", "uEV", "uER", "uW[0]", "uTime", "uBlue", "uCells", "uCell", "uIntro", "uLogo", "uTexScale", "uTexOff", "uTexPerCell", "uLet[0]", "uBrand", "uRev", "uRep", "uN", "uLink", "uPulse", "uSea", "uEnergy", "uFocus", "uFocusAmt", "uMask", "uThemeT", "uThemeO", "uColE[0]", "uColC[0]", "uAlpha"]);
-  const UC = locs(compose, ["uField", "uBlue", "uCells", "uCell", "uTog", "uHot", "uUF", "uThemeT", "uThemeO", "uTime"]);
+  const UC = locs(compose, ["uField", "uBlue", "uCells", "uCell", "uTog", "uHot", "uUF", "uThemeT", "uThemeO", "uTime", "uGo", "uGoHot", "uGoDir"]);
+  const UM = canWalk ? locs(mixer, ["uA", "uB", "uOut", "uArr", "uCells", "uMix", "uGround", "uLight"]) : {};
+  const UK = canWalk ? locs(carry, ["uT", "uPause", "uGhost", "uCell", "uDev", "uHop", "uGround", "uFg"]) : {};
 
   gl.useProgram(field);
   gl.uniform1i(UF.uMask, 0);
@@ -1278,6 +1501,13 @@ function createScene() {
   gl.useProgram(compose);
   gl.uniform1i(UC.uField, 3);
   gl.uniform1i(UC.uBlue, 1);
+  if (canWalk) {
+    gl.useProgram(mixer);
+    gl.uniform1i(UM.uA, 5);
+    gl.uniform1i(UM.uB, 6);
+    gl.uniform1i(UM.uOut, 2);
+    gl.uniform1i(UM.uArr, 7);
+  }
 
   // A dither cell is ~1/80 of the wordmark's height, between 1 and 1.5 CSS px and never under 2 device px.
   // The canvas itself runs at device pixels; the field pass runs at one fragment per cell.
@@ -1288,6 +1518,8 @@ function createScene() {
   let hr = hero.getBoundingClientRect();
   let quality = 0; // device px added to the cell size by adaptive quality (0..ADAPT_MAX)
   let built = false; // set once everything below exists; until then nothing draws
+  let walk = null; // the walk between two sheets, while there is one: { from, to, t, ends, n, hold } (see beginWalk)
+  let onWalkEnd = () => {};
   const waveData = new Float32Array(MAX_WAVES * 4);
 
   function resize() {
@@ -1306,7 +1538,15 @@ function createScene() {
     gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, cells[0], cells[1], 0, gl.RGBA, gl.UNSIGNED_BYTE, null);
     gl.bindFramebuffer(gl.FRAMEBUFFER, fbo);
     gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, fieldTex, 0);
+    for (const [unit, tex, fb] of [[5, aTex, fboA], [6, bTex, fboB]]) {
+      gl.activeTexture(gl.TEXTURE0 + unit);
+      gl.bindTexture(gl.TEXTURE_2D, tex);
+      gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, cells[0], cells[1], 0, gl.RGBA, gl.UNSIGNED_BYTE, null);
+      gl.bindFramebuffer(gl.FRAMEBUFFER, fb);
+      gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, tex, 0);
+    }
     gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+    if (walk) endWalk(); // (the cells changed under it: the page it was going to is simply there)
   }
 
   let pending = 0;
@@ -1327,21 +1567,217 @@ function createScene() {
     return [x0, y0, x1, y1];
   };
 
-  function setCommon(U) {
+  // The pointer's, the waves' and the clock's uniforms. `neutral` is the sheet seen on its own, untouched (no pointer, no wave):
+  // the walk pairs the dots of the two sheets as they lie at rest.
+  const wavesNone = Float32Array.from({ length: MAX_WAVES * 4 }, (_, i) => (i % 4 === 2 ? -1 : 0));
+  function setCommon(U, neutral = false) {
     const e = state.e;
     const [ex, ey] = toDev(e.x + hr.left, e.y + hr.top);
     gl.uniform2f(U.uDev, dev[0], dev[1]);
     // (a finger needs no ring or gradient under it)
-    gl.uniform3f(U.uE, ex, ey, e.str * (1 - state.cur.tk));
+    gl.uniform3f(U.uE, ex, ey, neutral ? 0 : e.str * (1 - state.cur.tk));
     // speed-dependent terms see at most MAX_SPEED, so a flick can never smear the field
     const sp = Math.hypot(e.vx, e.vy);
     const k = sp > MAX_SPEED ? MAX_SPEED / sp : 1;
     gl.uniform2f(U.uEV, e.vx * k * dpr, -e.vy * k * dpr);
     gl.uniform1f(U.uER, POINTER_R * dpr * (1 - 0.15 * state.linkAmt)); // the gradient tightens a little over a link
-    gl.uniform4fv(U["uW[0]"], waveData);
+    gl.uniform4fv(U["uW[0]"], neutral ? wavesNone : waveData);
     gl.uniform1f(U.uTime, state.time);
     gl.uniform2f(U.uCells, cells[0], cells[1]);
     gl.uniform1f(U.uCell, CELL);
+  }
+
+  // ---- sheets: what the field draws. The wordmark is one; a page is another (buildPageMasks, below). Each has its two faces
+  // (surface and beneath, one texture layout), the box it fills on the screen, and how it is cut into columns (the letters).
+  const home = { name: "home", faceTex: wmTex, beneathTex: brTex, tw: wm.tw, th: wm.th, cw: wm.cw, ch: wm.ch, rect: () => state.logoCss, colE: LETTER_EDGES.slice(1, 5), colC: LETTER_CENTERS, let: letterUniform };
+  const sheets = new Map([["home", home]]);
+  let current = home;
+  const pageLet = Float32Array.from({ length: 20 }, (_, i) => (i % 4 === 1 || i % 4 === 2 ? 1 : 0)); // per column: not melted, not mirrored
+  function addSheet(name, m) {
+    const sheet = {
+      name,
+      faceTex: uploadFace(m.face, 0),
+      beneathTex: uploadFace(m.beneath, 4),
+      tw: m.face.tw, th: m.face.th, cw: m.face.cw, ch: m.face.ch,
+      rect: () => {
+        const r = m.el.getBoundingClientRect();
+        return [r.left, r.top, Math.max(1, r.width), Math.max(1, r.height)];
+      },
+      colE: [2, 2, 2, 2], // one column: the whole sheet is one link's place
+      colC: [0.5, 0.5, 0.5, 0.5, 0.5],
+      let: pageLet,
+    };
+    sheets.set(name, sheet);
+    return sheet;
+  }
+
+  // Pass 1, for one sheet: its field, one fragment per cell, into `target`. The curtain, the wave, the pointer, the sea act on
+  // whichever sheet is drawn, as they do on the home.
+  function fieldPass(sheet, target, o = {}) {
+    const neutral = !!o.neutral;
+    gl.activeTexture(gl.TEXTURE0);
+    gl.bindTexture(gl.TEXTURE_2D, sheet.faceTex);
+    gl.activeTexture(gl.TEXTURE4);
+    gl.bindTexture(gl.TEXTURE_2D, sheet.beneathTex);
+    gl.bindFramebuffer(gl.FRAMEBUFFER, target);
+    gl.viewport(0, 0, cells[0], cells[1]);
+    gl.useProgram(field);
+    setCommon(UF, neutral);
+    gl.uniform2f(UF.uTexScale, sheet.cw / sheet.tw, sheet.ch / sheet.th);
+    gl.uniform2f(UF.uTexOff, MARGIN / sheet.tw, MARGIN / sheet.th);
+    gl.uniform1fv(UF["uColE[0]"], sheet.colE);
+    gl.uniform1fv(UF["uColC[0]"], sheet.colC);
+    gl.uniform1f(UF.uAlpha, o.alpha ? 1 : 0);
+    const [l, t, w, h] = sheet.rect();
+    const unit = state.logoCss[3]; // the effects are the home's size on every sheet: the wordmark's height is the unit
+    const [lx, ly] = toDev(l, t + h);
+    gl.uniform4fv(UF.uLogo, [lx / CELL, ly / CELL, (w * dpr) / CELL, (h * dpr) / CELL]);
+    gl.uniform1f(UF.uTexPerCell, sheet.ch / Math.max(1, (h * dpr) / CELL));
+    gl.uniform1f(UF.uIntro, o.intro ?? state.intro);
+    gl.uniform4fv(UF["uLet[0]"], sheet.let);
+    const cu = state.cur;
+    const [cx, cy] = toDev(cu.x + hr.left, cu.y + hr.top);
+    gl.uniform4fv(UF.uRev, [cx, cy, CURTAIN_R * unit * dpr * (1 + (TOUCH_CURTAIN - 1) * cu.tk), neutral ? 0 : cu.amt]);
+    gl.uniform1f(UF.uRep, neutral ? 0 : cu.rep);
+    const e = state.e;
+    const [nx, ny] = toDev(e.tx + hr.left, e.ty + hr.top);
+    gl.uniform4f(UF.uN, nx, ny, reduce || neutral ? 0 : state.nuc * (1 - cu.tk), NUCLEUS_R * dpr * (1 + 0.25 * state.linkAmt));
+    gl.uniform1f(UF.uPulse, neutral ? 0 : state.pulse);
+    const [sx, sy] = toDev(state.stir[0] + hr.left, state.stir[1] + hr.top);
+    gl.uniform3f(UF.uSea, reduce ? 0 : 1, sx, sy);
+    gl.uniform1f(UF.uEnergy, neutral ? 0 : state.energy);
+    gl.uniform4fv(UF.uFocus, !neutral && state.focusRect ? rectDev(state.focusRect) : [0, 0, 0, 0]);
+    gl.uniform1f(UF.uFocusAmt, neutral ? 0 : state.focusAmt);
+    // the theme change spreads out from the switch: its origin, in device px
+    const tr = themeBtn.getBoundingClientRect();
+    const [tgx, tgy] = toDev(tr.left + tr.width / 2, tr.top + tr.height / 2);
+    gl.uniform3f(UF.uThemeT, theme.from, theme.to, theme.p);
+    gl.uniform3f(UF.uThemeO, tgx, tgy, Math.hypot(Math.max(tgx, dev[0] - tgx), Math.max(tgy, dev[1] - tgy)));
+    gl.drawArrays(gl.TRIANGLES, 0, 3);
+  }
+
+  // ---- the walk: the lit dots of the old sheet walk to where the new sheet's are lit (walk.js says when and where)
+  /** the cells a sheet lights, seen untouched: read back from its own field (the alpha says which dots are the sheet's) */
+  function litCells(sheet) {
+    fieldPass(sheet, fboA, { neutral: true, alpha: true, intro: 1 });
+    const px = new Uint8Array(cells[0] * cells[1] * 4);
+    gl.readPixels(0, 0, cells[0], cells[1], gl.RGBA, gl.UNSIGNED_BYTE, px);
+    const lit = [];
+    for (let i = 0; i < px.length; i += 4) if (px[i + 3] > 191) lit.push(i >> 2); // (alpha 1: a lit dot of the sheet)
+    return lit;
+  }
+  /** start walking from the sheet on the screen to `name`; returns the length in seconds, or 0 if there is no walk to make */
+  function beginWalk(name) {
+    const to = sheets.get(name);
+    if (!canWalk || walk || !to || to === current || reduce) return 0;
+    const p = pair(litCells(current), litCells(to), cells[0], cells[1]);
+    gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, false);
+    gl.pixelStorei(gl.UNPACK_ALIGNMENT, 1);
+    for (const [unit, tex, data] of [[2, outTex, p.out], [7, arrTex, p.arr]]) {
+      gl.activeTexture(gl.TEXTURE0 + unit);
+      gl.bindTexture(gl.TEXTURE_2D, tex);
+      gl.texImage2D(gl.TEXTURE_2D, 0, gl.LUMINANCE, cells[0], cells[1], 0, gl.LUMINANCE, gl.UNSIGNED_BYTE, data);
+    }
+    for (const [key, data] of [["from", p.carriers.from], ["to", p.carriers.to], ["par", p.carriers.par]]) {
+      gl.bindBuffer(gl.ARRAY_BUFFER, carryBuf[key]);
+      gl.bufferData(gl.ARRAY_BUFFER, data, gl.STATIC_DRAW);
+    }
+    gl.bindBuffer(gl.ARRAY_BUFFER, buf);
+    walk = { from: current, to, t: 0, ends: p.ends + 2 * FLASH_S, n: p.carriers.n, hold: false, out: p.out, arr: p.arr };
+    return walk.ends;
+  }
+  /** debug: what the walk sees in a rectangle of cells (x, y from the bottom left): both sheets' fields, and the two times */
+  function probe(x, y, w, h) {
+    if (!walk) return null;
+    draw();
+    const out = { a: new Uint8Array(w * h * 4), b: new Uint8Array(w * h * 4), mix: new Uint8Array(w * h * 4), out: [], arr: [] };
+    for (const [key, fb] of [["a", fboA], ["b", fboB], ["mix", fbo]]) {
+      gl.bindFramebuffer(gl.FRAMEBUFFER, fb);
+      gl.readPixels(x, y, w, h, gl.RGBA, gl.UNSIGNED_BYTE, out[key]);
+    }
+    gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+    for (let j = 0; j < h; j++) for (let i = 0; i < w; i++) {
+      out.out.push(walk.out[(y + j) * cells[0] + x + i]);
+      out.arr.push(walk.arr[(y + j) * cells[0] + x + i]);
+    }
+    return out;
+  }
+  function endWalk() {
+    if (!walk) return;
+    current = walk.to;
+    walk = null;
+    onWalkEnd(current.name);
+  }
+  /** one step of the walk: true when it has just ended */
+  function stepWalk(dt) {
+    if (!walk) return false;
+    if (!walk.hold) walk.t += dt;
+    if (walk.t < walk.ends) return false;
+    endWalk();
+    return true;
+  }
+
+  // the old sheet's field and the new one's, mixed cell by cell into the field texture
+  function mixPass() {
+    gl.bindFramebuffer(gl.FRAMEBUFFER, fbo);
+    gl.viewport(0, 0, cells[0], cells[1]);
+    gl.useProgram(mixer);
+    gl.uniform2f(UM.uCells, cells[0], cells[1]);
+    gl.uniform4f(UM.uMix, walk.t, SPAN, FLASH_S, PAUSE_S);
+    gl.uniform3f(UM.uGround, theme.to, theme.to, theme.to); // (true black; true white)
+    gl.uniform1f(UM.uLight, theme.to);
+    gl.drawArrays(gl.TRIANGLES, 0, 3);
+  }
+
+  // pass 2: compose at device pixels (and the icons over the field, on the same grid)
+  function composePass() {
+    const tr = themeBtn.getBoundingClientRect();
+    const [tgx, tgy] = toDev(tr.left + tr.width / 2, tr.top + tr.height / 2);
+    gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+    gl.viewport(0, 0, dev[0], dev[1]);
+    gl.useProgram(compose);
+    gl.uniform2f(UC.uCells, cells[0], cells[1]);
+    gl.uniform1f(UC.uCell, CELL);
+    gl.uniform4f(UC.uTog, tgx / CELL, tgy / CELL, (ICON_R * dpr) / CELL, state.tog.amt);
+    gl.uniform1f(UC.uHot, state.tog.hot);
+    const gr = goBtn?.getBoundingClientRect();
+    const [ggx, ggy] = gr ? toDev(gr.left + gr.width / 2, gr.top + gr.height / 2) : [0, 0];
+    gl.uniform4f(UC.uGo, ggx / CELL, ggy / CELL, (ICON_R * dpr) / CELL, gr && gr.width ? state.go.amt : 0);
+    gl.uniform1f(UC.uGoHot, state.go.hot);
+    gl.uniform1f(UC.uGoDir, (walk ? walk.to : current) === home ? 1 : -1); // → to the next page, ← back
+    const fu = state.focusUI?.getBoundingClientRect();
+    const [fgx, fgy] = fu ? toDev(fu.left + fu.width / 2, fu.top + fu.height / 2) : [0, 0];
+    gl.uniform4f(UC.uUF, fgx / CELL, fgy / CELL, (ICON_R * dpr) / CELL, fu ? state.focusUIAmt : 0);
+    gl.uniform3f(UC.uThemeT, theme.from, theme.to, theme.p);
+    gl.uniform3f(UC.uThemeO, tgx, tgy, Math.hypot(Math.max(tgx, dev[0] - tgx), Math.max(tgy, dev[1] - tgy)));
+    gl.uniform1f(UC.uTime, state.time);
+    gl.drawArrays(gl.TRIANGLES, 0, 3);
+  }
+
+  // the walkers that stay lit, over the composed screen: each a cell on the grid, with the places it hopped from behind it
+  function carriersPass() {
+    if (!walk.n) return;
+    gl.useProgram(carry);
+    gl.uniform1f(UK.uT, walk.t);
+    gl.uniform1f(UK.uPause, PAUSE_S);
+    gl.uniform1f(UK.uCell, CELL);
+    gl.uniform2f(UK.uDev, dev[0], dev[1]);
+    gl.uniform1f(UK.uHop, HOP_RATE);
+    gl.uniform3f(UK.uGround, theme.to, theme.to, theme.to);
+    gl.uniform3f(UK.uFg, 0.9412 * (1 - theme.to), 0.9373 * (1 - theme.to), 0.9176 * (1 - theme.to)); // (paper on black; black on white)
+    for (const [key, loc, size] of [["from", 0, 2], ["to", 1, 2], ["par", 2, 4]]) {
+      gl.bindBuffer(gl.ARRAY_BUFFER, carryBuf[key]);
+      gl.enableVertexAttribArray(loc);
+      gl.vertexAttribPointer(loc, size, gl.FLOAT, false, 0, 0);
+    }
+    for (let g = TRAIL; g >= 0; g--) {
+      gl.uniform1f(UK.uGhost, g); // (the trail first, the walker last: it is on top)
+      gl.drawArrays(gl.POINTS, 0, walk.n);
+    }
+    gl.disableVertexAttribArray(1);
+    gl.disableVertexAttribArray(2);
+    gl.bindBuffer(gl.ARRAY_BUFFER, buf); // (and the full-screen triangle's back in place)
+    gl.vertexAttribPointer(0, 2, gl.FLOAT, false, 0, 0);
   }
 
   function draw() {
@@ -1355,59 +1791,14 @@ function createScene() {
       const [wx, wy] = w ? toDev(w.x + hr.left, w.y + hr.top) : [0, 0];
       waveData.set([wx, wy, w ? age : -1, w ? (1 - clamp01(age / WAVE_LIFE)) * clamp01(age / 0.2) * (w.k ?? 1) : 0], i * 4);
     }
-
-    // the theme switch (drawn by the compose pass, over the field)
-    const tr = themeBtn.getBoundingClientRect();
-    const [tgx, tgy] = toDev(tr.left + tr.width / 2, tr.top + tr.height / 2);
-
-    const [l, t, w, h] = state.logoCss;
-    const [lx, ly] = toDev(l, t + h);
-    const logo = [lx / CELL, ly / CELL, (w * dpr) / CELL, (h * dpr) / CELL];
-    const cu = state.cur;
-    const [cx, cy] = toDev(cu.x + hr.left, cu.y + hr.top);
-    const rev = [cx, cy, CURTAIN_R * h * dpr * (1 + (TOUCH_CURTAIN - 1) * cu.tk), cu.amt];
-
-    // pass 1: the field, one fragment per cell
-    gl.bindFramebuffer(gl.FRAMEBUFFER, fbo);
-    gl.viewport(0, 0, cells[0], cells[1]);
-    gl.useProgram(field);
-    setCommon(UF);
-    gl.uniform4fv(UF.uLogo, logo);
-    gl.uniform1f(UF.uTexPerCell, wm.ch / Math.max(1, (h * dpr) / CELL));
-    gl.uniform1f(UF.uIntro, state.intro);
-    gl.uniform4fv(UF["uLet[0]"], letterUniform);
-    gl.uniform4fv(UF.uRev, rev);
-    gl.uniform1f(UF.uRep, cu.rep);
-    const e = state.e;
-    const [nx, ny] = toDev(e.tx + hr.left, e.ty + hr.top);
-    gl.uniform4f(UF.uN, nx, ny, reduce ? 0 : state.nuc * (1 - cu.tk), NUCLEUS_R * dpr * (1 + 0.25 * state.linkAmt));
-    gl.uniform1f(UF.uPulse, state.pulse);
-    const [sx, sy] = toDev(state.stir[0] + hr.left, state.stir[1] + hr.top);
-    gl.uniform3f(UF.uSea, reduce ? 0 : 1, sx, sy);
-    gl.uniform1f(UF.uEnergy, state.energy);
-    gl.uniform4fv(UF.uFocus, state.focusRect ? rectDev(state.focusRect) : [0, 0, 0, 0]);
-    gl.uniform1f(UF.uFocusAmt, state.focusAmt);
-
-    // the theme change spreads out from the switch: its origin, in device px
-    gl.uniform3f(UF.uThemeT, theme.from, theme.to, theme.p);
-    gl.uniform3f(UF.uThemeO, tgx, tgy, Math.hypot(Math.max(tgx, dev[0] - tgx), Math.max(tgy, dev[1] - tgy)));
-    gl.drawArrays(gl.TRIANGLES, 0, 3);
-
-    // pass 2: compose at device pixels
-    gl.bindFramebuffer(gl.FRAMEBUFFER, null);
-    gl.viewport(0, 0, dev[0], dev[1]);
-    gl.useProgram(compose);
-    gl.uniform2f(UC.uCells, cells[0], cells[1]);
-    gl.uniform1f(UC.uCell, CELL);
-    gl.uniform4f(UC.uTog, tgx / CELL, tgy / CELL, (ICON_R * dpr) / CELL, state.tog.amt);
-    gl.uniform1f(UC.uHot, state.tog.hot);
-    const fu = state.focusUI?.getBoundingClientRect();
-    const [fgx, fgy] = fu ? toDev(fu.left + fu.width / 2, fu.top + fu.height / 2) : [0, 0];
-    gl.uniform4f(UC.uUF, fgx / CELL, fgy / CELL, (ICON_R * dpr) / CELL, fu ? state.focusUIAmt : 0);
-    gl.uniform3f(UC.uThemeT, theme.from, theme.to, theme.p);
-    gl.uniform3f(UC.uThemeO, tgx, tgy, Math.hypot(Math.max(tgx, dev[0] - tgx), Math.max(tgy, dev[1] - tgy)));
-    gl.uniform1f(UC.uTime, state.time);
-    gl.drawArrays(gl.TRIANGLES, 0, 3);
+    if (walk) {
+      // between two sheets: each drawn as it is on its own page, then mixed by the walk
+      fieldPass(walk.from, fboA, { alpha: true, intro: 1 });
+      fieldPass(walk.to, fboB, { alpha: true, intro: 1 });
+      mixPass();
+    } else fieldPass(current, fbo);
+    composePass();
+    if (walk) carriersPass();
   }
 
   built = true;
@@ -1456,7 +1847,15 @@ function createScene() {
   // debug: the composed screen as a data URL (drawn, then read in the same task, before the browser presents it)
   const shot = () => (draw(), canvas.toDataURL("image/png"));
 
-  return { draw, rectDev, cropCells, coarser, cellPx, shot, dpr, quality: () => quality, finish: () => gl.finish() };
+  return {
+    draw, rectDev, cropCells, coarser, cellPx, shot, dpr, quality: () => quality, finish: () => gl.finish(),
+    // sheets and the walk between them
+    canWalk, addSheet, hasSheet: (name) => sheets.has(name), current: () => current.name, setCurrent: (name) => (current = sheets.get(name) ?? current),
+    beginWalk, stepWalk, walking: () => !!walk, walkState: () => walk && { from: walk.from.name, to: walk.to.name, t: walk.t, ends: walk.ends, n: walk.n, hold: walk.hold },
+    holdWalk: (on, t) => { if (walk) { walk.hold = on; if (t !== undefined) walk.t = t; } },
+    onWalkEnd: (fn) => (onWalkEnd = fn),
+    probe, cells: () => cells.slice(),
+  };
 }
 
 // One semi-implicit step of a damped spring: o[k] moves toward target, o[v] is its velocity. [ω, ζ]: ζ = 1 is
@@ -1624,6 +2023,84 @@ makeBrandGroups();
 letterGroups.forEach((g, i) => (g.style.transform = `scale(${letters[i].mx}, ${letters[i].my})`));
 if (scene) html.classList.add("gl");
 
+// ------------------------------------------------------------------ pages
+// The home is one sheet; every <section data-page> is another, and the arrow in the corner goes to it (and back). The pages are
+// DOM first: with the script off, `:target` shows one and hides the wordmark; with it on but without WebGL, the hash does the same;
+// with WebGL the dots of the old sheet walk to the new one (walk.js) and the DOM follows when they have landed.
+const pageEls = new Map([...document.querySelectorAll("[data-page]")].map((el) => [el.dataset.page, el]));
+const logoEl = hero.querySelector(".logo");
+const FIRST_PAGE = pageEls.keys().next().value ?? null;
+const routeOf = () => {
+  const h = decodeURIComponent(location.hash.slice(1));
+  return pageEls.has(h) ? h : "home";
+};
+let shown = "home"; // the sheet whose DOM is live (its links can be reached)
+function showDom(name) {
+  shown = name;
+  html.dataset.page = name;
+  logoEl.inert = name !== "home";
+  pageEls.forEach((el, k) => {
+    el.classList.toggle("on", k === name);
+    el.inert = k !== name;
+  });
+  if (goBtn) {
+    const back = name !== "home";
+    goBtn.setAttribute("href", back ? "#" : `#${FIRST_PAGE}`);
+    goBtn.setAttribute("aria-label", back ? "Back to the home" : `Open ${FIRST_PAGE}`);
+  }
+  if (document.activeElement?.closest?.("[inert]")) document.activeElement.blur(); // (focus must not stay on what can no longer be reached)
+}
+/** the page's sheet, built from its DOM the first time it is needed (a second or so: the shapes are measured, then drawn) */
+function ensureSheet(name) {
+  if (!scene || name === "home" || scene.hasSheet(name)) return;
+  const el = pageEls.get(name);
+  const was = el.classList.contains("on");
+  el.classList.add("on"); // (a box with no layout has nothing to measure)
+  scene.addSheet(name, buildPageMasks(el));
+  el.classList.toggle("on", was);
+}
+let leaving = false;
+let wanted = "home"; // where the visitor last asked to be (the address says so too): what a walk that ends must check
+function goTo(name) {
+  wanted = name;
+  // (the address follows: a link set it already; a call from the console does not, and Back must still lead somewhere)
+  if (routeOf() !== name) history.pushState(null, "", name === "home" ? location.pathname + location.search : `#${name}`);
+  if (leaving || name === shown) return;
+  if (!scene || reduce || !scene.canWalk) {
+    ensureSheet(name);
+    scene?.setCurrent(name);
+    showDom(name);
+    scene?.draw();
+    return;
+  }
+  ensureSheet(name);
+  const el = pageEls.get(name);
+  if (el) {
+    el.classList.add("on"); // (it is drawn by the walk, and reachable only once it has landed)
+    el.inert = true;
+  }
+  logoEl.inert = true;
+  const len = scene.beginWalk(name);
+  if (!len) return showDom(name);
+  leaving = true;
+  html.classList.add("walking");
+  if (goBtn) goBtn.setAttribute("href", name === "home" ? `#${FIRST_PAGE}` : "#"); // (the arrow already turns round)
+}
+scene?.onWalkEnd((name) => {
+  leaving = false;
+  html.classList.remove("walking");
+  showDom(name);
+  if (wanted !== name) goTo(wanted); // (the visitor went back or forward while it walked)
+});
+window.addEventListener("hashchange", () => goTo(routeOf()));
+wanted = routeOf();
+if (routeOf() !== "home") {
+  // opened on a page (a link, a reload): the page's dots land from nothing, as the wordmark's do on the home
+  ensureSheet(routeOf());
+  scene?.setCurrent(routeOf());
+  showDom(routeOf());
+} else showDom("home");
+
 measureLogo();
 new ResizeObserver(measureLogo).observe(hero);
 
@@ -1710,6 +2187,9 @@ function update(now, dt) {
   state.nuc += (1 - Math.exp(-dt * 14)) * ((e.on ? 1 : 0) - state.nuc);
   stepTween(state.tog, now);
   state.tog.hot += (1 - Math.exp(-dt * 14)) * ((state.tog.hover || state.tog.focus ? 1 : 0) - state.tog.hot);
+  stepTween(state.go, now);
+  state.go.hot += (1 - Math.exp(-dt * 14)) * ((state.go.hover || state.go.focus ? 1 : 0) - state.go.hot);
+  scene?.stepWalk(dt);
   state.focusUIAmt += (1 - Math.exp(-dt * 12)) * ((state.focusUI ? 1 : 0) - state.focusUIAmt);
   stepTheme(now);
   state.waves = state.waves.filter((w) => state.time - w.t0 < WAVE_LIFE);
@@ -1764,6 +2244,7 @@ const forced = new URLSearchParams(location.search).has("boot");
 async function boot() {
   if (reduce) {
     state.tog.amt = 1;
+    state.go.amt = 1;
     html.classList.add("ready");
     updateLetters(performance.now());
     if (scene) {
@@ -1788,6 +2269,9 @@ async function boot() {
   html.classList.add("ready");
   ready = true;
   tweenTo(state.tog, 1, ICON_IN_MS, performance.now());
+  tweenTo(state.go, 1, ICON_IN_MS, performance.now());
+  // the pages' sheets take a second to build: do it now, while nothing is going on, so that the first walk does not wait for it
+  setTimeout(() => pageEls.forEach((_, name) => ensureSheet(name)), 1500);
   try {
     sessionStorage.setItem("cc-boot", "1");
   } catch {
@@ -1828,7 +2312,14 @@ if (new URLSearchParams(location.search).has("debug")) {
       state.intro = 1;
       ready = true;
       tweenTo(state.tog, 1, ICON_IN_MS, performance.now());
+      tweenTo(state.go, 1, ICON_IN_MS, performance.now());
     },
+    // the pages: where we are, a way to walk by hand (hold it, then set the second it is at), the sheets and the scene
+    pages: () => ({ shown, current: scene?.current(), walk: scene?.walkState(), canWalk: scene?.canWalk, routes: [...pageEls.keys()] }),
+    goTo,
+    holdWalk: (on = true, t) => scene?.holdWalk(on, t),
+    ensureSheet,
+    scene,
     // touch: the gesture state, and a way to drive the same paths with synthetic events
     touchState: () => ({ revealAll, tapQuick, lastType, touch: touch && { held: touch.held, moved: touch.moved }, tk: +state.cur.tk.toFixed(2) }),
     shot: () => scene?.shot(),
