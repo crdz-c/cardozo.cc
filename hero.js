@@ -21,6 +21,22 @@ const logoSvg = hero.querySelector(".logo svg");
 const reduce = matchMedia("(prefers-reduced-motion: reduce)").matches;
 const query = new URLSearchParams(location.search);
 
+// debug only (?debug&seed=7&freeze=6): the page is the same every load, so a change can be compared with the home pixel for
+// pixel. `seed` makes Math.random repeatable (the blue-noise map, each letter's mirrored identity, the cycle's plan); `freeze`
+// stops the clock at that many seconds, and the stand-alone choreography (its morphs and its pulse run on real time) with it.
+// Nothing here runs without ?debug.
+if (query.has("debug") && query.has("seed")) {
+  let a = Number(query.get("seed")) >>> 0;
+  Math.random = () => {
+    a = (a + 0x6d2b79f5) >>> 0;
+    let t = a;
+    t = Math.imul(t ^ (t >>> 15), t | 1);
+    t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
+}
+const FREEZE = query.has("debug") && query.has("freeze") ? Number(query.get("freeze")) : null;
+
 // (the two palettes live in the shader: true black + paper for dark, true white + true black for light)
 
 const clamp = (v, lo, hi) => Math.min(hi, Math.max(lo, v));
@@ -193,7 +209,7 @@ function pauseCycle(now) {
 
 function updateLetters(now) {
   const idle = now - state.lastInput > IDLE_MS;
-  if (ready && !reduce) {
+  if (ready && !reduce && FREEZE === null) {
     if (!idle) pauseCycle(now);
     else if (cycleStart === null && !revealAll) {
       cycleStart = now;
@@ -1625,7 +1641,7 @@ function frame(now) {
 
 // one step of everything that moves (dt in seconds, capped by the caller)
 function update(now, dt) {
-  state.time = (now - t0) / 1000;
+  state.time = FREEZE ?? (now - t0) / 1000;
   // the pointer: the nucleus is the hotspot itself; the gradient's centre follows on a spring, never far behind
   const e = state.e;
   spring(e, "x", "vx", e.tx, POINTER_SPRING, dt);
