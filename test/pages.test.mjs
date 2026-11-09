@@ -79,3 +79,13 @@ test("a page's sheet is made of the home's own texture layout, and the page is s
   assert.match(hero, /function buildPageMasks\(el\)/);
   assert.match(hero, /ctx\.lineJoin = "round"/, "heavy rounded words: the home's shapes are fat");
 });
+
+test("when the dots cannot start the page says why, and a lost context comes back by loading again", () => {
+  assert.match(hero, /function glFail\(why\)[\s\S]*?html\.dataset\.glWhy/, "the reason is on <html data-gl-why>");
+  assert.match(hero, /getContext\("experimental-webgl"/, "a plainer request is tried before giving up");
+  assert.match(hero, /a shader did not compile/);
+  assert.match(hero, /a program did not link/);
+  assert.match(hero, /try \{\s*return createScene\(\);\s*\} catch \(err\)/, "a throw in the scene is a fallback, not a dead page");
+  assert.match(hero, /addEventListener\("webglcontextrestored"[\s\S]*?location\.reload\(\)/);
+  assert.match(hero, /Date\.now\(\) - last < 10000/, "and never in a loop");
+});

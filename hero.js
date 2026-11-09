@@ -1414,15 +1414,25 @@ void main() { gl_FragColor = vec4(mix(uGround, uFg, vB), 1.0); }
 `;
 
 // ------------------------------------------------------------------ WebGL
+// Why the dots did not start, for the one who sees the plain wordmark: it is on <html data-gl-why> and in the console.
+function glFail(why) {
+  console.warn("hero: no dots, falling back to the SVG:", why);
+  html.dataset.glWhy = html.dataset.glWhy ? html.dataset.glWhy + " | " + why : why;
+  return null;
+}
 function createScene() {
-  const gl = canvas.getContext("webgl", { antialias: false, alpha: false, powerPreference: "high-performance" });
-  if (!gl) return null;
+  // A browser that refuses the first request (a GPU policy, a privacy mode) may grant a plainer one: try them in turn.
+  const gl =
+    canvas.getContext("webgl", { antialias: false, alpha: false, powerPreference: "high-performance" }) ||
+    canvas.getContext("webgl", { antialias: false, alpha: false }) ||
+    canvas.getContext("experimental-webgl", { antialias: false, alpha: false });
+  if (!gl) return glFail("the browser gave no WebGL context");
 
   const compile = (type, src) => {
     const s = gl.createShader(type);
     gl.shaderSource(s, src);
     gl.compileShader(s);
-    return gl.getShaderParameter(s, gl.COMPILE_STATUS) ? s : (console.warn(gl.getShaderInfoLog(s)), null);
+    return gl.getShaderParameter(s, gl.COMPILE_STATUS) ? s : (glFail("a shader did not compile: " + gl.getShaderInfoLog(s)), null);
   };
   const program = (fragSrc, vertSrc = VERT, attribs = ["position"]) => {
     const vs = compile(gl.VERTEX_SHADER, vertSrc);
@@ -1433,7 +1443,7 @@ function createScene() {
     gl.attachShader(p, fs);
     attribs.forEach((a, i) => gl.bindAttribLocation(p, i, a));
     gl.linkProgram(p);
-    return gl.getProgramParameter(p, gl.LINK_STATUS) ? p : null;
+    return gl.getProgramParameter(p, gl.LINK_STATUS) ? p : (glFail("a program did not link: " + gl.getProgramInfoLog(p)), null);
   };
   const field = program(FIELD);
   const compose = program(COMPOSE);
@@ -1812,9 +1822,20 @@ function createScene() {
 
   built = true;
 
+  // A lost context (the GPU reset, the machine woke, too many contexts) takes every texture with it and the dots with them. The
+  // browser gives the context back, but the scene is not rebuilt in place: when it returns, the page loads again (at most once
+  // every 10 s, so a GPU that keeps dropping it cannot loop).
   canvas.addEventListener("webglcontextlost", (e) => {
     e.preventDefault();
     html.classList.remove("gl");
+  });
+  canvas.addEventListener("webglcontextrestored", () => {
+    try {
+      const last = Number(sessionStorage.getItem("glReload")) || 0;
+      if (Date.now() - last < 10000) return;
+      sessionStorage.setItem("glReload", String(Date.now()));
+    } catch (_) {}
+    location.reload();
   });
 
   // debug only: the field as rendered (one pixel per cell), cropped to a client-px rect, scaled up `zoom`×
@@ -2025,7 +2046,13 @@ window.addEventListener("pointercancel", pointerOff, { passive: true });
 html.addEventListener("pointerleave", pointerOff);
 
 // ------------------------------------------------------------------ loop
-const scene = createScene();
+const scene = (() => {
+  try {
+    return createScene();
+  } catch (err) {
+    return glFail("the scene threw: " + (err && err.stack ? err.stack.split("\n").slice(0, 3).join(" / ") : err));
+  }
+})();
 makeBrandGroups();
 // The drawn letters are mirrored (a random identity per visit); the SVG letters, which are the links' hit areas, must be too,
 // or a tap lands on the unmirrored shape. (The no-WebGL fallback sets the same each frame.)
